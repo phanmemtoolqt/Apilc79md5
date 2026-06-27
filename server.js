@@ -1,6 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -8,280 +10,202 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// API gốc của bạn
-const API_GOC = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
+// Tạo thư mục public
+const publicDir = path.join(__dirname, 'public');
+if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
+app.use(express.static(publicDir));
 
-// Lưu lịch sử dự đoán
+const API_GOC = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
 let predictionHistory = [];
 const MAX_HISTORY = 20;
 
-// ==================== HÀM LẤY DỮ LIỆU TRỰC TIẾP TỪ API GỐC ====================
-async function getSessionData() {
-    try {
-        const response = await axios.get(API_GOC, {
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0',
-                'Accept': 'application/json'
-            }
-        });
-        if (response.data && response.data.list) {
-            return response.data.list.sort((a, b) => b.id - a.id);
-        }
-    } catch (error) {
-        console.error('Lỗi lấy API gốc:', error.message);
-    }
+async function fetchSessions() {
+    const res = await axios.get(API_GOC, { timeout: 10000 });
+    if (res.data && res.data.list) return res.data.list.sort((a, b) => b.id - a.id);
     return [];
 }
 
-// ==================== AI DỰ ĐOÁN ====================
-function predict(sessions) {
-    if (!sessions || sessions.length < 3) {
-        return { prediction: 'TAI', confidence: 50, taiProbability: 50, xiuProbability: 50 };
-    }
+function getPatterns(results) {
+    const arr = results.map(r => r === 'TAI' ? 'T' : 'X');
+    return {
+        all: arr.join(''),
+        last3: arr.slice(0, 3).join(''),
+        last5: arr.slice(0, 5).join(''),
+        last10: arr.slice(0, 10).join('')
+    };
+}
 
+function predict(sessions) {
     const results = sessions.map(s => s.resultTruyenThong);
     const points = sessions.map(s => s.point);
     const dices = sessions.flatMap(s => s.dices);
+    const patterns = getPatterns(results);
 
     let scores = { TAI: 0, XIU: 0 };
 
-    // 1. Tỉ lệ Tài/Xỉu
     const taiCount = results.filter(r => r === 'TAI').length;
-    const xiuCount = results.filter(r => r === 'XIU').length;
     const taiRatio = taiCount / results.length;
+    
+    if (taiRatio > 0.65) scores.XIU += 25;
+    else if (taiRatio < 0.35) scores.TAI += 25;
+    else if (taiRatio > 0.55) scores.XIU += 18;
+    else if (taiRatio < 0.45) scores.TAI += 18;
+    else { scores.TAI += 12; scores.XIU += 12; }
 
-    if (taiRatio > 0.6) scores.XIU += 25;
-    else if (taiRatio < 0.4) scores.TAI += 25;
-    else if (taiRatio > 0.55) scores.XIU += 15;
-    else if (taiRatio < 0.45) scores.TAI += 15;
-    else { scores.TAI += 10; scores.XIU += 10; }
-
-    // 2. Streak
     let streak = 1;
-    const currentType = results[0];
     for (let i = 1; i < results.length; i++) {
-        if (results[i] === currentType) streak++;
-        else break;
+        if (results[i] === results[0]) streak++; else break;
     }
+    if (streak >= 5) results[0] === 'TAI' ? (scores.XIU += 30) : (scores.TAI += 30);
+    else if (streak >= 3) results[0] === 'TAI' ? (scores.XIU += 22) : (scores.TAI += 22);
+    else if (streak >= 2) results[0] === 'TAI' ? (scores.TAI += 18) : (scores.XIU += 18);
 
-    if (streak >= 5) {
-        if (currentType === 'TAI') scores.XIU += 30;
-        else scores.TAI += 30;
-    } else if (streak >= 3) {
-        if (currentType === 'TAI') scores.XIU += 20;
-        else scores.TAI += 20;
-    } else if (streak >= 2) {
-        if (currentType === 'TAI') scores.TAI += 15;
-        else scores.XIU += 15;
-    }
+    const p3 = patterns.last3;
+    const p3W = { 'TTT': 'XIU', 'XXX': 'TAI', 'TTX': 'XIU', 'XXT': 'TAI', 'TXX': 'TAI', 'XTT': 'XIU', 'TXT': 'TAI', 'XTX': 'XIU' };
+    if (p3W[p3]) scores[p3W[p3]] += 20;
 
-    // 3. Điểm trung bình
+    const p5 = patterns.last5;
+    const p5W = { 'TTTTT': 'XIU', 'XXXXX': 'TAI', 'TTTTX': 'XIU', 'XXXXT': 'TAI', 'TTTXX': 'XIU', 'XXXTT': 'TAI' };
+    if (p5W[p5]) scores[p5W[p5]] += 15;
+
     const avgPoint = points.reduce((a, b) => a + b, 0) / points.length;
-    if (avgPoint > 11.5) scores.XIU += 20;
-    else if (avgPoint < 9.5) scores.TAI += 20;
-    else if (avgPoint > 11) scores.XIU += 10;
-    else if (avgPoint < 10) scores.TAI += 10;
+    if (avgPoint > 11.5) scores.XIU += 15;
+    else if (avgPoint < 9.5) scores.TAI += 15;
+    else if (avgPoint > 10.8) scores.XIU += 10;
+    else if (avgPoint < 10.2) scores.TAI += 10;
 
-    // 4. Xúc xắc
     const diceFreq = {};
     dices.forEach(d => diceFreq[d] = (diceFreq[d] || 0) + 1);
-    const highDice = (diceFreq[4] || 0) + (diceFreq[5] || 0) + (diceFreq[6] || 0);
-    const lowDice = (diceFreq[1] || 0) + (diceFreq[2] || 0) + (diceFreq[3] || 0);
+    const high = (diceFreq[4] || 0) + (diceFreq[5] || 0) + (diceFreq[6] || 0);
+    const low = (diceFreq[1] || 0) + (diceFreq[2] || 0) + (diceFreq[3] || 0);
+    if (high > low * 1.3) scores.TAI += 15;
+    else if (low > high * 1.3) scores.XIU += 15;
 
-    if (highDice > lowDice * 1.3) scores.TAI += 15;
-    else if (lowDice > highDice * 1.3) scores.XIU += 15;
-
-    // 5. Pattern 3 gần nhất
-    if (results.length >= 3) {
-        const last3 = results.slice(0, 3).map(r => r === 'TAI' ? 'T' : 'X').join('');
-        const patterns = {
-            'TTT': { XIU: 25 },
-            'XXX': { TAI: 25 },
-            'TTX': { XIU: 18 },
-            'XXT': { TAI: 18 },
-            'TXX': { TAI: 15 },
-            'XTT': { XIU: 15 }
-        };
-        if (patterns[last3]) {
-            if (patterns[last3].TAI) scores.TAI += patterns[last3].TAI;
-            if (patterns[last3].XIU) scores.XIU += patterns[last3].XIU;
-        }
-    }
-
-    const totalScore = scores.TAI + scores.XIU;
+    const total = scores.TAI + scores.XIU;
     const prediction = scores.TAI >= scores.XIU ? 'TAI' : 'XIU';
-    const confidence = Math.round((Math.max(scores.TAI, scores.XIU) / totalScore) * 10000) / 100;
-    const taiProbability = Math.round((scores.TAI / totalScore) * 10000) / 100;
-    const xiuProbability = Math.round((scores.XIU / totalScore) * 10000) / 100;
+    const confidence = Math.min(Math.round((Math.max(scores.TAI, scores.XIU) / total) * 10000) / 100, 99.99);
 
     return {
         prediction,
-        confidence: Math.min(confidence, 99.99),
-        taiProbability,
-        xiuProbability,
+        confidence,
+        taiProbability: Math.round((scores.TAI / total) * 10000) / 100,
+        xiuProbability: Math.round((scores.XIU / total) * 10000) / 100,
         analysis: {
             totalSamples: results.length,
             taiCount,
-            xiuCount,
+            xiuCount: results.length - taiCount,
             currentStreak: streak,
-            currentType,
+            currentType: results[0],
             avgPoint: Math.round(avgPoint * 100) / 100,
-            balanceRatio: Math.round(taiRatio * 100) / 100
+            patterns
         }
     };
 }
 
-// Cập nhật kết quả dự đoán cũ
-async function updateHistoryResults() {
-    const sessions = await getSessionData();
+async function updateResults() {
+    const sessions = await fetchSessions();
     if (!sessions.length) return;
-
-    predictionHistory.forEach(pred => {
-        if (pred.status === 'pending') {
-            const session = sessions.find(s => s.id === pred.sessionId);
-            if (session) {
-                pred.actualResult = session.resultTruyenThong;
-                pred.actualDices = session.dices;
-                pred.actualPoint = session.point;
-                pred.status = 'completed';
-                pred.isCorrect = pred.prediction === pred.actualResult;
+    predictionHistory.forEach(p => {
+        if (p.trangThai === 'Đang chờ') {
+            const found = sessions.find(s => s.id === p.phienDuDoan);
+            if (found) {
+                p.ketQuaThucTe = found.resultTruyenThong;
+                p.dicesThucTe = found.dices;
+                p.diemThucTe = found.point;
+                p.trangThai = 'Đã hoàn thành';
+                p.danhGia = p.duDoan === found.resultTruyenThong ? 'Đúng' : 'Sai';
             }
         }
     });
 }
 
-// ==================== ROUTES ====================
-
-// API chính - /vanhoa
+// ==================== API ====================
 app.get('/vanhoa', async (req, res) => {
     try {
-        // Lấy dữ liệu trực tiếp từ API gốc
-        const sessions = await getSessionData();
+        const sessions = await fetchSessions();
+        if (!sessions.length) return res.json({ status: 'error', message: 'Không lấy được dữ liệu' });
 
-        if (!sessions.length) {
-            return res.status(500).json({
-                status: 'error',
-                message: 'Không lấy được dữ liệu từ API gốc: ' + API_GOC
-            });
-        }
-
-        // Dự đoán
+        await updateResults();
         const prediction = predict(sessions);
+        const latest = sessions[0];
+        const nextId = latest.id + 1;
 
-        // Lấy phiên mới nhất
-        const latestSession = sessions[0];
-        const nextSessionId = latestSession ? latestSession.id + 1 : null;
-
-        // Lưu vào lịch sử
-        const record = {
+        const newPred = {
             id: predictionHistory.length + 1,
-            sessionId: nextSessionId,
-            prediction: prediction.prediction,
-            confidence: prediction.confidence,
-            taiProbability: prediction.taiProbability,
-            xiuProbability: prediction.xiuProbability,
-            timestamp: new Date().toISOString(),
-            status: 'pending',
-            actualResult: null,
-            actualDices: null,
-            actualPoint: null,
-            isCorrect: null
+            phienDuDoan: nextId,
+            duDoan: prediction.prediction,
+            doTinCay: prediction.confidence,
+            xacSuatTai: prediction.taiProbability,
+            xacSuatXiu: prediction.xiuProbability,
+            thoiGianDuDoan: new Date().toISOString(),
+            trangThai: 'Đang chờ',
+            ketQuaThucTe: null,
+            dicesThucTe: null,
+            diemThucTe: null,
+            danhGia: null
         };
 
-        predictionHistory.push(record);
-        if (predictionHistory.length > MAX_HISTORY) {
-            predictionHistory = predictionHistory.slice(-MAX_HISTORY);
-        }
+        predictionHistory.push(newPred);
+        if (predictionHistory.length > MAX_HISTORY) predictionHistory = predictionHistory.slice(-MAX_HISTORY);
 
-        // Cập nhật kết quả cũ
-        await updateHistoryResults();
-
-        // Tính độ chính xác
-        const completed = predictionHistory.filter(p => p.status === 'completed');
-        const correct = completed.filter(p => p.isCorrect).length;
-        const accuracy = completed.length > 0 ? Math.round((correct / completed.length) * 10000) / 100 : 0;
+        const completed = predictionHistory.filter(p => p.trangThai === 'Đã hoàn thành');
+        const correct = completed.filter(p => p.danhGia === 'Đúng').length;
 
         res.json({
             status: 'success',
-            timestamp: new Date().toISOString(),
-            sourceAPI: API_GOC,
-            data: {
-                nextSessionId,
-                prediction: prediction.prediction,
-                confidence: prediction.confidence,
-                taiProbability: prediction.taiProbability,
-                xiuProbability: prediction.xiuProbability,
-                analysis: prediction.analysis,
-                latestSession: {
-                    id: latestSession.id,
-                    result: latestSession.resultTruyenThong,
-                    dices: latestSession.dices,
-                    point: latestSession.point
-                },
-                history: {
-                    total: predictionHistory.length,
-                    completed: completed.length,
-                    correct,
-                    incorrect: completed.length - correct,
-                    accuracy,
-                    predictions: predictionHistory.slice().reverse()
-                }
-            }
+            thoiGian: new Date().toISOString(),
+            duDoan: {
+                phienDuDoan: nextId,
+                duDoan: prediction.prediction,
+                doTinCay: prediction.confidence,
+                xacSuatTai: prediction.taiProbability,
+                xacSuatXiu: prediction.xiuProbability,
+                phanTich: prediction.analysis
+            },
+            lichSu: {
+                tong: predictionHistory.length,
+                daHoanThanh: completed.length,
+                dangCho: predictionHistory.length - completed.length,
+                dung: correct,
+                sai: completed.length - correct,
+                doChinhXac: completed.length > 0 ? Math.round((correct / completed.length) * 100) : 0,
+                danhSach: predictionHistory.slice().reverse()
+            },
+            phienMoiNhat: { id: latest.id, ketQua: latest.resultTruyenThong, dices: latest.dices, diem: latest.point }
         });
-
-    } catch (error) {
-        res.status(500).json({
-            status: 'error',
-            message: 'Lỗi server: ' + error.message
-        });
+    } catch (e) {
+        res.json({ status: 'error', message: e.message });
     }
 });
 
-// API lịch sử
 app.get('/api/history', async (req, res) => {
-    await updateHistoryResults();
+    await updateResults();
+    res.json({ status: 'success', lichSu: predictionHistory.slice().reverse() });
+});
 
-    const completed = predictionHistory.filter(p => p.status === 'completed');
-    const correct = completed.filter(p => p.isCorrect).length;
-    const accuracy = completed.length > 0 ? Math.round((correct / completed.length) * 10000) / 100 : 0;
-
+app.get('/api/latest', async (req, res) => {
+    const sessions = await fetchSessions();
+    await updateResults();
+    const completed = predictionHistory.filter(p => p.trangThai === 'Đã hoàn thành');
+    const correct = completed.filter(p => p.danhGia === 'Đúng').length;
     res.json({
         status: 'success',
-        data: {
-            predictions: predictionHistory.slice().reverse(),
-            total: predictionHistory.length,
-            completed: completed.length,
-            pending: predictionHistory.filter(p => p.status === 'pending').length,
-            correct,
-            incorrect: completed.length - correct,
-            accuracy
+        phienMoiNhat: sessions[0],
+        lichSu: predictionHistory.slice().reverse(),
+        thongKe: {
+            tong: predictionHistory.length,
+            dung: correct,
+            sai: completed.length - correct,
+            doChinhXac: completed.length > 0 ? Math.round((correct / completed.length) * 100) : 0
         }
     });
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        uptime: process.uptime(),
-        sourceAPI: API_GOC,
-        historyCount: predictionHistory.length
-    });
+// ==================== HTML ====================
+app.get('/', (req, res) => {
+    res.sendFile(path.join(publicDir, 'index.html'));
 });
 
-// 404
-app.use((req, res) => {
-    res.status(404).json({
-        status: 'error',
-        message: 'Route not found. Dùng /vanhoa hoặc /api/history'
-    });
-});
+app.use((req, res) => res.status(404).json({ status: 'error', message: 'Dùng /vanhoa hoặc /' }));
 
-// Start
-app.listen(PORT, () => {
-    console.log(`Server chạy port ${PORT}`);
-    console.log(`API Gốc: ${API_GOC}`);
-    console.log(`Dự đoán: http://localhost:${PORT}/vanhoa`);
-    console.log(`Lịch sử: http://localhost:${PORT}/api/history`);
-});
+app.listen(PORT, () => console.log(`✅ VanHoa API chạy port ${PORT}`));
