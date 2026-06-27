@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎲 Tài Xỉu AI Predictor VIP | VanHoa CSKHToolHehe</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Roboto:wght@300;400;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --card: rgba(20, 20, 40, 0.9);
+            --gold: #ffd700;
+            --tai: #ff4757;
+            --xiu: #2ed573;
+            --blue: #5352ed;
+            --purple: #a855f7;
+            --pink: #ec4899;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Roboto', sans-serif;
+            background: var(--bg);
+            color: white;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        .stars {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        .star {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            animation: twinkle 2s infinite;
+        }
+        
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .header {
+            text-align: center;
+            padding: 30px 0;
+            animation: fadeInDown 0.8s ease;
+        }
+        
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .header .logo {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 3.5em;
+            font-weight: 900;
+            background: linear-gradient(45deg, var(--gold), #ff6b6b, var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: none;
+            animation: glow 2s ease-in-out infinite;
+            margin-bottom: 10px;
+        }
+        
+        @keyframes glow {
+            0%, 100% { filter: brightness(1); }
+            50% { filter: brightness(1.3); }
+        }
+        
+        .header .subtitle {
+            font-size: 1.2em;
+            opacity: 0.8;
+            letter-spacing: 3px;
+        }
+        
+        .badge-vip {
+            display: inline-block;
+            background: linear-gradient(45deg, var(--gold), #ffa502);
+            color: #000;
+            padding: 8px 20px;
+            border-radius: 30px;
+            font-weight: 900;
+            font-size: 0.9em;
+            margin-left: 10px;
+            animation: pulse 1.5s ease-in-out infinite;
+            text-shadow: none;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin: 25px 0;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 15px 35px;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            position: relative;
+            overflow: hidden;
+            color: white;
+        }
+        
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+        
+        .btn:hover::before { left: 100%; }
+        .btn:hover { transform: translateY(-3px); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .btn:active { transform: translateY(0); }
+        
+        .btn-predict {
+            background: linear-gradient(45deg, var(--pink), var(--tai));
+            box-shadow: 0 5px 20px rgba(255, 71, 87, 0.4);
+        }
+        
+        .btn-refresh {
+            background: linear-gradient(45deg, var(--blue), var(--purple));
+            box-shadow: 0 5px 20px rgba(83, 82, 237, 0.4);
+        }
+        
+        .btn-auto {
+            background: linear-gradient(45deg, #00b894, #00cec9);
+            box-shadow: 0 5px 20px rgba(0, 184, 148, 0.4);
+        }
+        
+        .btn-auto.active {
+            background: linear-gradient(45deg, var(--tai), var(--pink));
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; }
+            .header .logo { font-size: 2.2em; }
+        }
+        
+        .card {
+            background: var(--card);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            padding: 25px;
+            animation: fadeInUp 0.6s ease;
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .card-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.4em;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--gold);
+        }
+        
+        .prediction-result {
+            text-align: center;
+            padding: 20px 0;
+        }
+        
+        .result-big {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 7em;
+            font-weight: 900;
+            animation: bounceIn 0.6s ease;
+        }
+        
+        @keyframes bounceIn {
+            0% { transform: scale(0.3); opacity: 0; }
+            50% { transform: scale(1.1); }
+            70% { transform: scale(0.9); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        
+        .result-tai { color: var(--tai); text-shadow: 0 0 40px rgba(255,71,87,0.6); }
+        .result-xiu { color: var(--xiu); text-shadow: 0 0 40px rgba(46,213,115,0.6); }
+        
+        .confidence-bar {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            height: 35px;
+            margin: 20px 0;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--blue), var(--purple), var(--pink));
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.9em;
+            transition: width 1s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .confidence-fill::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shimmer 1.5s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .prob-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 15px 0;
+        }
+        
+        .prob-item {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s;
+        }
+        
+        .prob-item:hover {
+            background: rgba(255,255,255,0.1);
+            transform: translateY(-3px);
+        }
+        
+        .prob-value {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2.5em;
+            font-weight: 900;
+            margin: 10px 0;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 18px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .stat-value {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.8em;
+            font-weight: 900;
+            color: var(--gold);
+        }
+        
+        .stat-label {
+            font-size: 0.8em;
+            opacity: 0.7;
+            margin-top: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 0.9em;
+        }
+        
+        thead th {
+            background: rgba(255,255,255,0.08);
+            padding: 14px 12px;
+            text-align: left;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.75em;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            border-bottom: 2px solid rgba(255,255,255,0.15);
+            color: var(--gold);
+        }
+        
+        tbody td {
+            padding: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        
+        tbody tr:hover {
+            background: rgba(255,255,255,0.04);
+        }
+        
+        .badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 0.8em;
+            letter-spacing: 1px;
+        }
+        
+        .badge-success {
+            background: rgba(46, 213, 115, 0.2);
+            color: var(--xiu);
+            border: 1px solid rgba(46, 213, 115, 0.4);
+        }
+        
+        .badge-danger {
+            background: rgba(255, 71, 87, 0.2);
+            color: var(--tai);
+            border: 1px solid rgba(255, 71, 87, 0.4);
+        }
+        
+        .badge-pending {
+            background: rgba(255, 215, 0, 0.2);
+            color: var(--gold);
+            border: 1px solid rgba(255, 215, 0, 0.4);
+        }
+        
+        .badge-tai {
+            background: rgba(255, 71, 87, 0.2);
+            color: var(--tai);
+        }
+        
+        .badge-xiu {
+            background: rgba(46, 213, 115, 0.2);
+            color: var(--xiu);
+        }
+        
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid rgba(255,255,255,0.1);
+            border-top-color: var(--gold);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 30px auto;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .info-text {
+            font-size: 0.85em;
+            opacity: 0.6;
+            margin-top: 15px;
+            text-align: center;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 30px 0;
+            opacity: 0.5;
+            font-size: 0.85em;
+        }
+        
+        .source-badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.05);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            margin-top: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="stars" id="stars"></div>
+    
+    <div class="container">
+        <div class="header">
+            <div class="logo">🎲 TÀI XỈU AI</div>
+            <p class="subtitle">
+                HỆ THỐNG DỰ ĐOÁN THÔNG MINH
+                <span class="badge-vip">👑 PREMIUM</span>
+            </p>
+            <p class="source-badge">📡 API: wtxmd52.tele68.com/v1/txmd5/sessions</p>
+        </div>
+        
+        <div class="controls">
+            <button class="btn btn-predict" onclick="getPrediction()">
+                <i class="fas fa-magic"></i> DỰ ĐOÁN NGAY
+            </button>
+            <button class="btn btn-refresh" onclick="refreshData()">
+                <i class="fas fa-sync-alt"></i> LÀM MỚI
+            </button>
+            <button class="btn btn-auto" id="autoBtn" onclick="toggleAuto()">
+                <i class="fas fa-robot"></i> AUTO PREDICT
+            </button>
+        </div>
+        
+        <div class="grid">
+            <div class="card">
+                <div class="card-title">
+                    <i class="fas fa-bullseye"></i>
+                    DỰ ĐOÁN TIẾP THEO
+                </div>
+                <div class="prediction-result" id="predictionContent">
+                    <p style="text-align:center; opacity:0.6;">Nhấn "DỰ ĐOÁN NGAY" để bắt đầu</p>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-title">
+                    <i class="fas fa-chart-bar"></i>
+                    THỐNG KÊ
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="totalPred">0</div>
+                        <div class="stat-label">Tổng Dự Đoán</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="accuracy">0%</div>
+                        <div class="stat-label">Độ Chính Xác</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="currentStreak">0</div>
+                        <div class="stat-label">Streak</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">
+                <i class="fas fa-history"></i>
+                LỊCH SỬ DỰ ĐOÁN (20 PHIÊN GẦN NHẤT)
+            </div>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Phiên</th>
+                            <th>Dự Đoán</th>
+                            <th>Độ Tin Cậy</th>
+                            <th>Kết Quả</th>
+                            <th>Xúc Xắc</th>
+                            <th>Đánh Giá</th>
+                            <th>Thời Gian</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyBody">
+                        <tr>
+                            <td colspan="7" style="text-align:center; padding:30px;">
+                                <div class="spinner" style="width:30px; height:30px; border-width:3px;"></div>
+                                <p>Đang tải dữ liệu từ API...</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>👑 VanHoa CSKHToolHehe Premium Edition v3.0</p>
+            <p>⚡ Powered by DeepAI Pattern Recognition | Real-time Data</p>
+            <p>📡 Nguồn dữ liệu: wtxmd52.tele68.com/v1/txmd5/sessions</p>
+        </div>
+    </div>
+    
+    <script>
+        // Tạo stars background
+        const starsContainer = document.getElementById('stars');
+        for (let i = 0; i < 100; i++) {
+            const star = document.createElement('div');
+            star.className = 'star';
+            star.style.left = Math.random() * 100 + '%';
+            star.style.top = Math.random() * 100 + '%';
+            star.style.width = Math.random() * 3 + 1 + 'px';
+            star.style.height = star.style.width;
+            star.style.animationDelay = Math.random() * 2 + 's';
+            starsContainer.appendChild(star);
+        }
+        
+        let autoInterval = null;
+        let isAuto = false;
+        
+        async function getPrediction() {
+            const content = document.getElementById('predictionContent');
+            content.innerHTML = '<div class="spinner"></div>';
+            
+            try {
+                const res = await fetch('/vanhoa');
+                const data = await res.json();
+                
+                if (data.status === 'success') {
+                    const pred = data.data;
+                    const cls = pred.prediction === 'TAI' ? 'result-tai' : 'result-xiu';
+                    
+                    content.innerHTML = `
+                        <div class="result-big ${cls}">${pred.prediction}</div>
+                        <p style="font-size:1.1em; margin-bottom:10px;">
+                            Phiên <strong>#${pred.nextSessionId}</strong> | 
+                            ${pred.confidence}% tin cậy
+                        </p>
+                        
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width:${pred.confidence}%">
+                                ${pred.confidence}%
+                            </div>
+                        </div>
+                        
+                        <div class="prob-grid">
+                            <div class="prob-item">
+                                <div>🎯 TÀI</div>
+                                <div class="prob-value" style="color:var(--tai);">${pred.taiProbability}%</div>
+                            </div>
+                            <div class="prob-item">
+                                <div>🎯 XỈU</div>
+                                <div class="prob-value" style="color:var(--xiu);">${pred.xiuProbability}%</div>
+                            </div>
+                        </div>
+                        
+                        <div class="info-text">
+                            📊 Streak: ${pred.analysis.currentStreak} ${pred.analysis.currentType} | 
+                            📈 Mẫu: ${pred.analysis.totalSamples} | 
+                            🎲 Điểm TB: ${pred.analysis.avgPoint}
+                        </div>
+                    `;
+                    
+                    updateHistory();
+                    updateStats();
+                } else {
+                    content.innerHTML = '<p style="color:var(--tai); text-align:center;">❌ Lỗi: ' + data.message + '</p>';
+                }
+            } catch (err) {
+                content.innerHTML = '<p style="color:var(--tai); text-align:center;">❌ Lỗi kết nối server</p>';
+                console.error(err);
+            }
+        }
+        
+        async function updateHistory() {
+            try {
+                const res = await fetch('/api/history');
+                const data = await res.json();
+                
+                if (data.status === 'success') {
+                    const history = data.data.predictions;
+                    const tbody = document.getElementById('historyBody');
+                    
+                    if (!history.length) {
+                        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Chưa có dự đoán</td></tr>';
+                        return;
+                    }
+                    
+                    tbody.innerHTML = history.slice().reverse().map(pred => {
+                        let evalText = '⏳ Đang chờ';
+                        let evalClass = 'badge-pending';
+                        let resultHtml = '---';
+                        let dicesHtml = '---';
+                        
+                        if (pred.status === 'completed') {
+                            evalText = pred.isCorrect ? '✅ ĐÚNG' : '❌ SAI';
+                            evalClass = pred.isCorrect ? 'badge-success' : 'badge-danger';
+                            resultHtml = `<span class="badge ${pred.actualResult === 'TAI' ? 'badge-tai' : 'badge-xiu'}">${pred.actualResult}</span>`;
+                            dicesHtml = pred.actualDices ? pred.actualDices.join('-') : '---';
+                        }
+                        
+                        const time = new Date(pred.timestamp).toLocaleTimeString('vi-VN');
+                        
+                        return `
+                            <tr>
+                                <td><strong>#${pred.sessionId}</strong></td>
+                                <td><span class="badge ${pred.prediction === 'TAI' ? 'badge-tai' : 'badge-xiu'}">${pred.prediction}</span></td>
+                                <td>${pred.confidence}%</td>
+                                <td>${resultHtml}</td>
+                                <td>${dicesHtml}</td>
+                                <td><span class="badge ${evalClass}">${evalText}</span></td>
+                                <td>${time}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+        
+        async function updateStats() {
+            try {
+                const res = await fetch('/api/history');
+                const data = await res.json();
+                
+                if (data.status === 'success') {
+                    document.getElementById('totalPred').textContent = data.data.totalPredictions;
+                    document.getElementById('accuracy').textContent = data.data.accuracy + '%';
+                    
+                    const history = data.data.predictions;
+                    let streak = 0;
+                    for (let i = history.length - 1; i >= 0; i--) {
+                        if (history[i].status === 'completed' && history[i].isCorrect) streak++;
+                        else break;
+                    }
+                    document.getElementById('currentStreak').textContent = streak;
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+        
+        async function refreshData() {
+            await fetch('/api/latest');
+            await updateHistory();
+            await updateStats();
+        }
+        
+        function toggleAuto() {
+            const btn = document.getElementById('autoBtn');
+            
+            if (isAuto) {
+                clearInterval(autoInterval);
+                isAuto = false;
+                btn.classList.remove('active');
+                btn.innerHTML = '<i class="fas fa-robot"></i> AUTO PREDICT';
+            } else {
+                getPrediction();
+                autoInterval = setInterval(getPrediction, 10000);
+                isAuto = true;
+                btn.classList.add('active');
+                btn.innerHTML = '<i class="fas fa-stop"></i> DỪNG AUTO';
+            }
+        }
+        
+        window.onload = () => {
+            refreshData();
+            setTimeout(getPrediction, 2000);
+        };
+        
+        window.onbeforeunload = () => {
+            if (autoInterval) clearInterval(autoInterval);
+        };
+    </script>
+</body>
+</html>
