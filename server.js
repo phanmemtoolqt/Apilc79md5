@@ -37,8 +37,8 @@ function getPatterns(results) {
     };
 }
 
-// ==================== THUẬT TOÁN ĂN THÔNG ====================
-function predictAnThong(sessions) {
+// ==================== THUẬT TOÁN DỰ ĐOÁN SIÊU VIP ====================
+function predictSuperVIP(sessions) {
     if (!sessions || sessions.length < 5) {
         return {
             prediction: 'TAI', confidence: 50, taiProbability: 50, xiuProbability: 50,
@@ -115,15 +115,12 @@ function predictAnThong(sessions) {
 
     const p7Map = {
         'TTTTTTT': { side: 'XIU', score: 30 },
-        'XXXXXXX': { side: 'TAI', score: 30 },
-        'TXTXTXT': { side: 'TAI', score: 14 },
-        'XTXTXTX': { side: 'XIU', score: 14 }
+        'XXXXXXX': { side: 'TAI', score: 30 }
     };
     if (p7Map[p7]) { scores[p7Map[p7].side] += p7Map[p7].score; reasons.push('P7 đặc biệt'); }
 
     // 4. ĐIỂM SỐ (15%)
     const avgPoint = points.reduce((a, b) => a + b, 0) / points.length;
-    const recent10Avg = points.slice(0, 10).reduce((a, b) => a + b, 0) / 10;
     const recent5Avg = points.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
 
     if (avgPoint > 12) { scores.XIU += 20; reasons.push(`Điểm TB ${avgPoint.toFixed(1)} > 12 -> Xỉu`); }
@@ -169,7 +166,7 @@ function predictAnThong(sessions) {
         analysis: {
             totalSamples: results.length, taiCount, xiuCount, taiRatio: Math.round(taiRatio * 100) / 100,
             currentStreak: streak, currentType, avgPoint: Math.round(avgPoint * 100) / 100,
-            recent10Avg: Math.round(recent10Avg * 100) / 100, recent5Avg: Math.round(recent5Avg * 100) / 100,
+            recent5Avg: Math.round(recent5Avg * 100) / 100,
             patterns, reasons,
             diceAll: { high: highAll, low: lowAll, freq: diceFreq },
             diceRecent: { high: highRecent, low: lowRecent, freq: recentDiceFreq }
@@ -181,8 +178,10 @@ function predictAnThong(sessions) {
 async function updateResults() {
     const sessions = await fetchSessions();
     if (!sessions.length) return;
+
     predictionHistory.forEach(p => {
         if (p.trangThai === 'Đang chờ') {
+            // Tìm phiên có id = phienDuDoan để check kết quả
             const found = sessions.find(s => s.id === p.phienDuDoan);
             if (found) {
                 p.ketQuaThucTe = found.resultTruyenThong;
@@ -190,7 +189,12 @@ async function updateResults() {
                 p.diemThucTe = found.point;
                 p.tongDiemThucTe = found.dices.reduce((a, b) => a + b, 0);
                 p.trangThai = 'Đã hoàn thành';
-                p.danhGia = p.duDoan === found.resultTruyenThong ? 'Đúng' : 'Sai';
+                // FIX: So sánh trực tiếp duDoan với ketQuaThucTe
+                if (p.duDoan === p.ketQuaThucTe) {
+                    p.danhGia = 'Đúng';
+                } else {
+                    p.danhGia = 'Sai';
+                }
                 p.thoiGianHoanThanh = new Date().toISOString();
             }
         }
@@ -204,7 +208,7 @@ app.get('/vanhoa', async (req, res) => {
         if (!sessions.length) return res.json({ status: 'error', message: 'Không lấy được dữ liệu' });
 
         await updateResults();
-        const prediction = predictAnThong(sessions);
+        const prediction = predictSuperVIP(sessions);
         const latest = sessions[0];
         const prevSession = sessions[1] || null;
         const nextId = latest.id + 1;
@@ -244,7 +248,7 @@ app.get('/vanhoa', async (req, res) => {
         res.json({
             status: 'success',
             thoiGian: new Date().toISOString(),
-            banQuyen: 'VanHoa CSKHToolHehe Premium v5',
+            banQuyen: 'VanHoa CSKHToolHehe Premium v6',
             phienTruoc: prevSession ? {
                 id: prevSession.id,
                 ketQua: prevSession.resultTruyenThong,
@@ -331,85 +335,92 @@ app.get('/api/raw', async (req, res) => {
     res.json({ status: 'success', nguon: API_GOC, tongPhien: sessions.length, data: sessions.slice(0, 50) });
 });
 
-// ==================== HTML NHÚNG TRỰC TIẾP ====================
+// ==================== HTML NHÚNG TRỰC TIẾP SIÊU VIP ====================
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VanHoa Tai Xiu AI An Thong VIP</title>
+    <title>VanHoa Tai Xiu AI Predictor VIP</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Be+Vietnam+Pro:wght@300;400;600;700;900&display=swap" rel="stylesheet">
     <style>
-        :root{--bg:#050510;--card:#0d0d20;--gold:#f0c040;--tai:#ff3b5c;--xiu:#00e676;--blue:#448aff;--purple:#b388ff;--pink:#ff6b9d;--text:#e8e8e8;--border:#1e1e3a}
+        :root{--bg:#03030a;--card:#0a0a1a;--gold:#f0c040;--tai:#ff3b5c;--xiu:#00e676;--blue:#448aff;--purple:#b388ff;--pink:#ff6b9d;--text:#e8e8e8;--border:#1a1a35}
         *{margin:0;padding:0;box-sizing:border-box}
         body{font-family:'Be Vietnam Pro',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
-        body::before{content:'';position:fixed;top:0;left:0;width:100%;height:100%;background:radial-gradient(ellipse at 50% 0%,rgba(240,192,64,.06) 0%,transparent 55%),radial-gradient(ellipse at 80% 80%,rgba(68,138,255,.05) 0%,transparent 55%);pointer-events:none;z-index:0}
-        .container{max-width:1400px;margin:0 auto;padding:15px;position:relative;z-index:1}
-        .header{text-align:center;padding:25px 0 18px;border-bottom:2px solid var(--border);margin-bottom:20px;position:relative}
-        .header::after{content:'';position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);width:250px;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent)}
-        .logo{font-family:'Orbitron',sans-serif;font-size:3em;font-weight:900;background:linear-gradient(135deg,var(--gold),var(--pink),var(--purple),var(--blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:logoGlow 3s ease-in-out infinite;margin-bottom:3px}
-        @keyframes logoGlow{0%,100%{filter:brightness(1)}50%{filter:brightness(1.4)}}
-        .sub{font-size:.95em;opacity:.7;letter-spacing:3px;text-transform:uppercase}
-        .brand{display:inline-block;background:linear-gradient(135deg,var(--gold),#ff8c00);color:#000;padding:8px 22px;border-radius:30px;font-weight:800;font-size:.85em;margin-top:8px;letter-spacing:2px;box-shadow:0 0 25px rgba(240,192,64,.25)}
-        .live-badge{display:inline-flex;align-items:center;gap:8px;background:#1a1a2e;padding:8px 18px;border-radius:25px;font-size:.8em;margin-left:10px;border:1px solid var(--border)}
+        body::before{content:'';position:fixed;top:0;left:0;width:100%;height:100%;background:radial-gradient(ellipse at 50% 0%,rgba(240,192,64,.05) 0%,transparent 55%),radial-gradient(ellipse at 80% 80%,rgba(68,138,255,.04) 0%,transparent 55%);pointer-events:none;z-index:0}
+        .container{max-width:1450px;margin:0 auto;padding:15px;position:relative;z-index:1}
+        .header{text-align:center;padding:30px 0 20px;border-bottom:2px solid var(--border);margin-bottom:22px;position:relative}
+        .header::after{content:'';position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);width:300px;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent)}
+        .logo{font-family:'Orbitron',sans-serif;font-size:3.2em;font-weight:900;background:linear-gradient(135deg,var(--gold),var(--pink),var(--purple),var(--blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:logoGlow 3s ease-in-out infinite;margin-bottom:5px}
+        @keyframes logoGlow{0%,100%{filter:brightness(1)}50%{filter:brightness(1.5)}}
+        .sub{font-size:1em;opacity:.7;letter-spacing:3px;text-transform:uppercase}
+        .brand{display:inline-block;background:linear-gradient(135deg,var(--gold),#ff8c00);color:#000;padding:8px 25px;border-radius:30px;font-weight:800;font-size:.88em;margin-top:8px;letter-spacing:2px;box-shadow:0 0 30px rgba(240,192,64,.3)}
+        .live-badge{display:inline-flex;align-items:center;gap:8px;background:#1a1a2e;padding:8px 20px;border-radius:25px;font-size:.82em;margin-left:12px;border:1px solid var(--border)}
         .live-dot{width:10px;height:10px;background:#00e676;border-radius:50%;animation:blink 1s infinite}
         @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-        .top-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:15px;margin-bottom:18px}
-        @media(max-width:1000px){.top-row{grid-template-columns:1fr 1fr}}
-        @media(max-width:650px){.top-row{grid-template-columns:1fr}}
+        .top-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:18px}
+        @media(max-width:1050px){.top-row{grid-template-columns:1fr 1fr}}
+        @media(max-width:700px){.top-row{grid-template-columns:1fr}}
         .card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:22px;transition:all .35s;position:relative;overflow:hidden}
-        .card:hover{border-color:var(--gold);box-shadow:0 0 35px rgba(240,192,64,.06)}
-        .card-title{display:flex;align-items:center;gap:10px;margin-bottom:16px;font-family:'Orbitron',sans-serif;font-size:1em;color:var(--gold);letter-spacing:2px;text-transform:uppercase}
+        .card::before{content:'';position:absolute;top:0;left:0;width:100%;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent);opacity:0;transition:opacity .35s}
+        .card:hover::before{opacity:1}
+        .card:hover{border-color:var(--gold);box-shadow:0 0 40px rgba(240,192,64,.08);transform:translateY(-2px)}
+        .card-title{display:flex;align-items:center;gap:10px;margin-bottom:18px;font-family:'Orbitron',sans-serif;font-size:1.05em;color:var(--gold);letter-spacing:2px;text-transform:uppercase}
         .pred-box{text-align:center;padding:15px 0}
-        .pred-val{font-family:'Orbitron',sans-serif;font-size:7em;font-weight:900;line-height:1;animation:bounceIn .6s ease}
-        @keyframes bounceIn{0%{transform:scale(.3);opacity:0}50%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
-        .pred-tai{color:var(--tai);text-shadow:0 0 50px rgba(255,59,92,.6)}
-        .pred-xiu{color:var(--xiu);text-shadow:0 0 50px rgba(0,230,118,.6)}
-        .session-tag{font-size:1.1em;margin:6px 0;opacity:.85}
-        .strength-badge{display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:.8em;letter-spacing:1px;margin:4px 0}
+        .pred-val{font-family:'Orbitron',sans-serif;font-size:7.5em;font-weight:900;line-height:1;animation:bounceIn .6s ease}
+        @keyframes bounceIn{0%{transform:scale(.3);opacity:0}50%{transform:scale(1.1)}70%{transform:scale(.95)}100%{transform:scale(1);opacity:1}}
+        .pred-tai{color:var(--tai);text-shadow:0 0 60px rgba(255,59,92,.7),0 0 120px rgba(255,59,92,.3)}
+        .pred-xiu{color:var(--xiu);text-shadow:0 0 60px rgba(0,230,118,.7),0 0 120px rgba(0,230,118,.3)}
+        .session-tag{font-size:1.15em;margin:6px 0;opacity:.85}
+        .strength-badge{display:inline-block;padding:6px 18px;border-radius:20px;font-weight:700;font-size:.82em;letter-spacing:1px;margin:5px 0}
         .s-strong{background:rgba(0,230,118,.2);color:#00e676;border:1px solid rgba(0,230,118,.4)}
         .s-medium{background:rgba(240,192,64,.2);color:var(--gold);border:1px solid rgba(240,192,64,.4)}
         .s-weak{background:rgba(255,59,92,.2);color:var(--tai);border:1px solid rgba(255,59,92,.4)}
-        .conf-bar{background:#1a1a2e;border-radius:12px;height:34px;margin:14px 0;overflow:hidden;border:1px solid var(--border)}
-        .conf-fill{height:100%;border-radius:12px;background:linear-gradient(90deg,var(--blue),var(--purple),var(--pink));display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85em;transition:width 1s ease;position:relative;overflow:hidden}
+        .conf-bar{background:#1a1a2e;border-radius:14px;height:36px;margin:15px 0;overflow:hidden;border:1px solid var(--border)}
+        .conf-fill{height:100%;border-radius:14px;background:linear-gradient(90deg,var(--blue),var(--purple),var(--pink));display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.88em;transition:width 1s ease;position:relative;overflow:hidden}
         .conf-fill::after{content:'';position:absolute;top:0;left:-100%;width:100%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.2),transparent);animation:shimmer 2s infinite}
         @keyframes shimmer{100%{left:100%}}
-        .prob-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
-        .prob-card{background:#1a1a2e;border-radius:12px;padding:14px;text-align:center;border:1px solid var(--border);transition:all .3s}
+        .prob-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+        .prob-card{background:#1a1a2e;border-radius:14px;padding:15px;text-align:center;border:1px solid var(--border);transition:all .3s}
         .prob-card:hover{transform:translateY(-2px);border-color:var(--gold)}
-        .prob-lbl{font-size:.8em;opacity:.7;text-transform:uppercase;letter-spacing:2px}
-        .prob-num{font-family:'Orbitron',sans-serif;font-size:2em;font-weight:900}
+        .prob-lbl{font-size:.82em;opacity:.7;text-transform:uppercase;letter-spacing:2px;margin-bottom:4px}
+        .prob-num{font-family:'Orbitron',sans-serif;font-size:2.2em;font-weight:900}
         .prob-tai{color:var(--tai)}.prob-xiu{color:var(--xiu)}
         .info-row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;justify-content:center}
-        .tag{background:#1a1a2e;padding:5px 12px;border-radius:18px;font-size:.75em;border:1px solid var(--border)}
+        .tag{background:#1a1a2e;padding:5px 14px;border-radius:18px;font-size:.76em;border:1px solid var(--border)}
         .tag-pattern{font-family:'Orbitron',sans-serif;color:var(--gold);letter-spacing:2px;background:rgba(240,192,64,.06)}
         .session-info-card{text-align:center}
-        .session-info-card .sess-id{font-family:'Orbitron',sans-serif;font-size:1.8em;color:var(--gold)}
-        .session-info-card .dice-row{display:flex;justify-content:center;gap:12px;margin:12px 0}
-        .dice-box{width:55px;height:55px;background:linear-gradient(135deg,#1a1a2e,#252545);border:2px solid var(--border);border-radius:12px;display:flex;align-items:center;justify-content:center;font-family:'Orbitron',sans-serif;font-size:1.8em;font-weight:900;color:#fff}
-        .stats-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
-        @media(max-width:700px){.stats-grid{grid-template-columns:repeat(3,1fr)}}
-        .stat-box{background:#1a1a2e;border-radius:12px;padding:14px;text-align:center;border:1px solid var(--border);transition:all .3s}
+        .sess-id{font-family:'Orbitron',sans-serif;font-size:2em;color:var(--gold);margin-bottom:8px}
+        .dice-row{display:flex;justify-content:center;gap:14px;margin:14px 0}
+        .dice-box{width:60px;height:60px;background:linear-gradient(135deg,#1a1a2e,#252545);border:2px solid var(--border);border-radius:14px;display:flex;align-items:center;justify-content:center;font-family:'Orbitron',sans-serif;font-size:2em;font-weight:900;color:#fff;box-shadow:0 4px 15px rgba(0,0,0,.3)}
+        .result-big{font-family:'Orbitron',sans-serif;font-size:2em;font-weight:900;margin:6px 0}
+        .result-tai{color:var(--tai)}.result-xiu{color:var(--xiu)}
+        .stats-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+        @media(max-width:750px){.stats-grid{grid-template-columns:repeat(3,1fr)}}
+        .stat-box{background:#1a1a2e;border-radius:14px;padding:16px;text-align:center;border:1px solid var(--border);transition:all .3s}
         .stat-box:hover{transform:translateY(-2px);border-color:var(--gold)}
-        .stat-num{font-family:'Orbitron',sans-serif;font-size:1.6em;font-weight:900;color:var(--gold)}
-        .stat-lbl{font-size:.68em;opacity:.6;margin-top:4px;text-transform:uppercase;letter-spacing:1px}
-        .table-wrap{overflow-x:auto;border-radius:12px}
-        table{width:100%;border-collapse:collapse;font-size:.85em}
-        thead th{background:#1a1a2e;padding:12px 8px;text-align:center;font-family:'Orbitron',sans-serif;font-size:.68em;letter-spacing:2px;color:var(--gold);text-transform:uppercase;border-bottom:2px solid var(--border);white-space:nowrap}
-        tbody td{padding:10px 7px;text-align:center;border-bottom:1px solid var(--border);white-space:nowrap}
+        .stat-num{font-family:'Orbitron',sans-serif;font-size:1.7em;font-weight:900;color:var(--gold)}
+        .stat-lbl{font-size:.7em;opacity:.6;margin-top:5px;text-transform:uppercase;letter-spacing:1px}
+        .table-wrap{overflow-x:auto;border-radius:14px}
+        table{width:100%;border-collapse:collapse;font-size:.86em}
+        thead th{background:#1a1a2e;padding:14px 10px;text-align:center;font-family:'Orbitron',sans-serif;font-size:.7em;letter-spacing:2px;color:var(--gold);text-transform:uppercase;border-bottom:2px solid var(--border);white-space:nowrap}
+        tbody td{padding:11px 8px;text-align:center;border-bottom:1px solid var(--border);white-space:nowrap}
         tbody tr:hover{background:rgba(255,255,255,.025)}
-        .badge{display:inline-block;padding:4px 12px;border-radius:18px;font-weight:700;font-size:.78em;letter-spacing:1px}
-        .badge-tai{background:rgba(255,59,92,.15);color:var(--tai);border:1px solid rgba(255,59,92,.3)}
-        .badge-xiu{background:rgba(0,230,118,.15);color:var(--xiu);border:1px solid rgba(0,230,118,.3)}
-        .badge-dung{background:rgba(0,230,118,.18);color:#00e676;border:1px solid rgba(0,230,118,.4);animation:correctGlow 2s infinite}
-        @keyframes correctGlow{0%,100%{box-shadow:0 0 0 rgba(0,230,118,0)}50%{box-shadow:0 0 15px rgba(0,230,118,.3)}}
-        .badge-sai{background:rgba(255,59,92,.18);color:#ff3b5c;border:1px solid rgba(255,59,92,.4)}
-        .badge-cho{background:rgba(240,192,64,.15);color:var(--gold);border:1px solid rgba(240,192,64,.3);animation:pulse 1.5s infinite}
+        tbody tr:nth-child(even){background:rgba(255,255,255,.01)}
+        .badge{display:inline-block;padding:5px 14px;border-radius:20px;font-weight:700;font-size:.78em;letter-spacing:1px}
+        .badge-tai{background:rgba(255,59,92,.18);color:var(--tai);border:1px solid rgba(255,59,92,.3)}
+        .badge-xiu{background:rgba(0,230,118,.18);color:var(--xiu);border:1px solid rgba(0,230,118,.3)}
+        .badge-dung{background:rgba(0,230,118,.2);color:#00e676;border:1px solid rgba(0,230,118,.4);animation:correctGlow 2s infinite}
+        @keyframes correctGlow{0%,100%{box-shadow:0 0 0 rgba(0,230,118,0)}50%{box-shadow:0 0 18px rgba(0,230,118,.35)}}
+        .badge-sai{background:rgba(255,59,92,.2);color:#ff3b5c;border:1px solid rgba(255,59,92,.4)}
+        .badge-cho{background:rgba(240,192,64,.18);color:var(--gold);border:1px solid rgba(240,192,64,.3);animation:pulse 1.5s infinite}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-        .footer{text-align:center;padding:25px 0 20px;opacity:.45;font-size:.78em;border-top:2px solid var(--border);margin-top:22px}
+        .footer{text-align:center;padding:25px 0 20px;opacity:.45;font-size:.78em;border-top:2px solid var(--border);margin-top:22px;position:relative}
+        .footer::before{content:'';position:absolute;top:-2px;left:50%;transform:translateX(-50%);width:200px;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent)}
         .footer strong{color:var(--gold)}
-        @media(max-width:600px){.logo{font-size:2em}.pred-val{font-size:4.5em}.dice-box{width:42px;height:42px;font-size:1.3em}}
+        .reasons-list{margin-top:10px;font-size:.78em;opacity:.75;line-height:1.6}
+        @media(max-width:650px){.logo{font-size:2em}.pred-val{font-size:4.5em}.dice-box{width:45px;height:45px;font-size:1.5em}}
     </style>
 </head>
 <body>
@@ -422,34 +433,34 @@ app.get('/', (req, res) => {
         </div>
         <div class="top-row">
             <div class="card" id="predCard">
-                <div class="card-title">DU DOAN TIEP THEO</div>
+                <div class="card-title">🎯 DU DOAN TIEP THEO</div>
                 <div class="pred-box" id="predContent"><p style="opacity:.5;padding:40px;">Dang tai...</p></div>
             </div>
-            <div class="card session-info-card" id="currentSessionCard">
-                <div class="card-title">PHIEN HIEN TAI</div>
-                <div id="currentSessionContent"><p style="opacity:.5;padding:30px;">Dang tai...</p></div>
+            <div class="card session-info-card" id="currentCard">
+                <div class="card-title">📡 PHIEN HIEN TAI</div>
+                <div id="currentContent"><p style="opacity:.5;padding:35px;">Dang tai...</p></div>
             </div>
-            <div class="card session-info-card" id="prevSessionCard">
-                <div class="card-title">PHIEN TRUOC</div>
-                <div id="prevSessionContent"><p style="opacity:.5;padding:30px;">Dang tai...</p></div>
+            <div class="card session-info-card" id="prevCard">
+                <div class="card-title">⏮️ PHIEN TRUOC</div>
+                <div id="prevContent"><p style="opacity:.5;padding:35px;">Dang tai...</p></div>
             </div>
         </div>
         <div class="card" style="margin-bottom:18px;">
-            <div class="card-title">THONG KE & PATTERN</div>
+            <div class="card-title">📊 THONG KE & PHAN TICH</div>
             <div class="stats-grid" id="statsContent"></div>
-            <div id="patternInfo" style="margin-top:10px;"></div>
-            <div id="reasonsList" style="margin-top:8px;font-size:.8em;opacity:.75;"></div>
+            <div id="patternInfo" style="margin-top:12px;"></div>
+            <div class="reasons-list" id="reasonsList"></div>
         </div>
         <div class="card">
-            <div class="card-title">LICH SU DU DOAN (20 Phien)</div>
+            <div class="card-title">📝 LICH SU DU DOAN (20 Phien Gan Nhat)</div>
             <div class="table-wrap">
                 <table>
-                    <thead><tr><th>#</th><th>Phien</th><th>Du Doan</th><th>Tin Cay</th><th>Suc Manh</th><th>KQ</th><th>Xuc Xac</th><th>Tong</th><th>Danh Gia</th><th>Thoi Gian</th></tr></thead>
-                    <tbody id="historyBody"><tr><td colspan="10" style="padding:30px;">Dang tai...</td></tr></tbody>
+                    <thead><tr><th>#</th><th>Phien</th><th>Du Doan</th><th>Tin Cay</th><th>Suc Manh</th><th>KQ Thuc Te</th><th>Xuc Xac</th><th>Tong Diem</th><th>Danh Gia</th><th>Thoi Gian</th></tr></thead>
+                    <tbody id="historyBody"><tr><td colspan="10" style="padding:35px;">Dang tai du lieu...</td></tr></tbody>
                 </table>
             </div>
         </div>
-        <div class="footer">&copy; 2026 <strong>VanHoa CSKHToolHehe</strong> - An Thong AI Predictor v5.0</div>
+        <div class="footer">&copy; 2026 <strong>VanHoa CSKHToolHehe</strong> - AI An Thong Predictor v6.0</div>
     </div>
     <script>
         async function fetchData(){try{const r=await fetch('/api/latest');const d=await r.json();if(d.status!=='success')return;updatePrediction(d);updateSessions(d);updateStats(d);updateHistory(d)}catch(e){}}
@@ -469,28 +480,27 @@ app.get('/', (req, res) => {
                 </div>
                 <div class="info-row">
                     <span class="tag">Streak: \${lp.phanTich?.currentStreak||0} \${lp.phanTich?.currentType||''}</span>
-                    <span class="tag">Mau: \${lp.phanTich?.totalSamples||0}</span>
-                    <span class="tag">Diem TB: \${lp.phanTich?.avgPoint||0}</span>
+                    <span class="tag">\${lp.phanTich?.totalSamples||0} phien</span>
                 </div>
             \`;
         }
         function updateSessions(d){
             const curr=d.phienHienTai;
             if(curr){
-                document.getElementById('currentSessionContent').innerHTML=\`
+                document.getElementById('currentContent').innerHTML=\`
                     <div class="sess-id">#\${curr.id}</div>
                     <div class="dice-row">\${(curr.dices||[]).map(x=>'<div class="dice-box">'+x+'</div>').join('')}</div>
-                    <div style="font-size:1.4em;font-weight:700;">\${curr.ketQua}</div>
-                    <div style="opacity:.7;">Diem: \${curr.diem} | Tong: \${curr.tongDiem}</div>
+                    <div class="result-big \${curr.ketQua==='TAI'?'result-tai':'result-xiu'}">\${curr.ketQua}</div>
+                    <div style="opacity:.75;">Diem: \${curr.diem} | Tong: \${curr.tongDiem}</div>
                 \`;
             }
             const prev=d.phienTruoc;
             if(prev){
-                document.getElementById('prevSessionContent').innerHTML=\`
+                document.getElementById('prevContent').innerHTML=\`
                     <div class="sess-id">#\${prev.id}</div>
                     <div class="dice-row">\${(prev.dices||[]).map(x=>'<div class="dice-box">'+x+'</div>').join('')}</div>
-                    <div style="font-size:1.4em;font-weight:700;">\${prev.ketQua}</div>
-                    <div style="opacity:.7;">Diem: \${prev.diem} | Tong: \${prev.tongDiem}</div>
+                    <div class="result-big \${prev.ketQua==='TAI'?'result-tai':'result-xiu'}">\${prev.ketQua}</div>
+                    <div style="opacity:.75;">Diem: \${prev.diem} | Tong: \${prev.tongDiem}</div>
                 \`;
             }
         }
@@ -500,7 +510,7 @@ app.get('/', (req, res) => {
                 <div class="stat-box"><div class="stat-num">\${s.tong||0}</div><div class="stat-lbl">Tong</div></div>
                 <div class="stat-box"><div class="stat-num" style="color:#00e676;">\${s.dung||0}</div><div class="stat-lbl">Dung</div></div>
                 <div class="stat-box"><div class="stat-num" style="color:#ff3b5c;">\${s.sai||0}</div><div class="stat-lbl">Sai</div></div>
-                <div class="stat-box"><div class="stat-num" style="color:var(--gold);">\${s.doChinhXac||0}%</div><div class="stat-lbl">Do CX</div></div>
+                <div class="stat-box"><div class="stat-num" style="color:var(--gold);">\${s.doChinhXac||0}%</div><div class="stat-lbl">Chinh Xac</div></div>
                 <div class="stat-box"><div class="stat-num" style="color:#448aff;">\${s.streakDung||0}</div><div class="stat-lbl">Streak Dung</div></div>
             \`;
             document.getElementById('patternInfo').innerHTML=\`
@@ -512,24 +522,29 @@ app.get('/', (req, res) => {
                 </div>
             \`;
             const reasons=lp?.phanTich?.reasons||[];
-            document.getElementById('reasonsList').innerHTML=reasons.length?'<strong style="color:var(--gold);">Ly do:</strong> '+reasons.join(' | '):'';
+            document.getElementById('reasonsList').innerHTML=reasons.length?'<strong style="color:var(--gold);">🎯 Ly do du doan:</strong> '+reasons.map(r=>'<span style="display:inline-block;background:#1a1a2e;padding:3px 10px;border-radius:12px;margin:2px 3px;font-size:.85em;">'+r+'</span>').join(' '):'';
         }
         function updateHistory(d){
             const h=d.lichSu||[],tb=document.getElementById('historyBody');
-            if(!h.length){tb.innerHTML='<tr><td colspan="10" style="padding:30px;">Chua co du doan</td></tr>';return}
+            if(!h.length){tb.innerHTML='<tr><td colspan="10" style="padding:35px;">Chua co du doan nao</td></tr>';return}
             tb.innerHTML=h.slice(0,20).map((p,i)=>{
                 const t=p.thoiGianDuDoan?new Date(p.thoiGianDuDoan).toLocaleTimeString('vi-VN'):'-';
-                const status=p.trangThai==='Dang cho'?'<span class="badge badge-cho">Cho</span>':(p.danhGia==='Dung'?'<span class="badge badge-dung">DUNG</span>':'<span class="badge badge-sai">SAI</span>');
-                const result=p.ketQuaThucTe?\`<span class="badge \${p.ketQuaThucTe==='TAI'?'badge-tai':'badge-xiu'}">\${p.ketQuaThucTe}</span>\`:'<span style="opacity:.35;">---</span>';
-                const dices=p.dicesThucTe?p.dicesThucTe.join('-'):'---';
+                const statusBadge=p.trangThai==='Dang cho'?'<span class="badge badge-cho">⏳ Cho</span>':(p.danhGia==='Dung'?'<span class="badge badge-dung">✅ DUNG</span>':'<span class="badge badge-sai">❌ SAI</span>');
+                const resultBadge=p.ketQuaThucTe?\`<span class="badge \${p.ketQuaThucTe==='TAI'?'badge-tai':'badge-xiu'}">\${p.ketQuaThucTe}</span>\`:'<span style="opacity:.35;">---</span>';
+                const dices=p.dicesThucTe?p.dicesThucTe.join(' - '):'---';
                 const sum=p.tongDiemThucTe||p.diemThucTe||'---';
                 const strIcon={RAT_MANH:'💎',MANH:'🔥',KHA:'👍',TRUNG_BINH:'➖',YEU:'⚠️'};
                 return\`<tr>
-                    <td>\${i+1}</td><td><strong>#\${p.phienDuDoan}</strong></td>
+                    <td><strong>\${i+1}</strong></td>
+                    <td><strong>#\${p.phienDuDoan}</strong></td>
                     <td><span class="badge \${p.duDoan==='TAI'?'badge-tai':'badge-xiu'}">\${p.duDoan}</span></td>
-                    <td>\${p.doTinCay}%</td><td>\${strIcon[p.sucManh]||'➖'} \${p.sucManh||'-'}</td>
-                    <td>\${result}</td><td>\${dices}</td><td>\${sum}</td>
-                    <td>\${status}</td><td style="font-size:.75em;">\${t}</td>
+                    <td>\${p.doTinCay}%</td>
+                    <td>\${strIcon[p.sucManh]||'➖'} \${p.sucManh||'-'}</td>
+                    <td>\${resultBadge}</td>
+                    <td>\${dices}</td>
+                    <td>\${sum}</td>
+                    <td>\${statusBadge}</td>
+                    <td style="font-size:.75em;">\${t}</td>
                 </tr>\`;
             }).join('');
         }
@@ -539,13 +554,11 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
-// ==================== 404 ====================
 app.use((req, res) => res.status(404).json({ status: 'error', message: 'Dung /vanhoa hoac /' }));
 
-// ==================== START ====================
 app.listen(PORT, () => {
     console.log('==========================================');
-    console.log('  VanHoa Tai Xiu AI An Thong VIP v5.0');
+    console.log('  VanHoa Tai Xiu AI An Thong VIP v6.0');
     console.log('  Port: ' + PORT);
     console.log('  /vanhoa - API JSON');
     console.log('  /       - Giao dien VIP');
