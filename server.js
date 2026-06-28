@@ -5,7 +5,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Thay bằng API lịch sử của bạn
-const HISTORY_API = "https://your-api-history.com/history";
+const HISTORY_API = "https://wtxmd52.tele68.com/v1/txmd5/sessions";
 
 function buildPattern(list) {
     return list.map(i => i.resultTruyenThong === "TAI" ? "T" : "X").join("");
