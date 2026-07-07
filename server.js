@@ -1,765 +1,1262 @@
-const axios = require('axios');
+
+// ============================================
+// SUPER VIP AI PREDICTOR - TÀI XỈU
+// Node.js Server + Render Engine
+// ============================================
+
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const url = require('url');
 const crypto = require('crypto');
 
-// ============================================================
-// SIÊU THUẬT TOÁN DỰ ĐOÁN TÀI XỈU VIP PRO MAX ULTRA
-// Tích hợp: Markov bậc 3, Phân tích phổ, Monte Carlo, 
-//           Mạng nơ-ron nhân tạo nhẹ, Phân tích Bayes,
-//           Pattern Matching, Entropy, Hồi quy phi tuyến
-// ============================================================
+// ============================================
+// CONFIG
+// ============================================
+const CONFIG = {
+    API_BASE: 'https://wtxmd52.tele68.com/v1/txmd5',
+    PORT: 8080,
+    UPDATE_INTERVAL: 5000, // 5 giây cập nhật 1 lần
+    MAX_HISTORY: 100
+};
 
-const API_URL = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
-const WINDOW_SIZE = 50;
-const PATTERN_DEPTH = 5;
-
-// ============================================================
-// TIỆN ÍCH TOÁN HỌC
-// ============================================================
+// ============================================
+// UTILITY FUNCTIONS
+// ============================================
 class MathUtils {
-    static sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
-    static tanh(x) { return Math.tanh(x); }
-    static relu(x) { return Math.max(0, x); }
-    static softmax(arr) {
-        const max = Math.max(...arr);
-        const exps = arr.map(x => Math.exp(x - max));
-        const sum = exps.reduce((a, b) => a + b, 0);
-        return exps.map(x => x / sum);
+    static mean(arr) {
+        if (!arr || arr.length === 0) return 0;
+        return arr.reduce((a, b) => a + b, 0) / arr.length;
     }
-    static mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
+
     static std(arr) {
-        const m = MathUtils.mean(arr);
-        return Math.sqrt(arr.reduce((a, b) => a + Math.pow(b - m, 2), 0) / arr.length);
+        if (!arr || arr.length < 2) return 0;
+        const mean = MathUtils.mean(arr);
+        const variance = arr.reduce((sum, x) => sum + Math.pow(x - mean, 2), 0) / (arr.length - 1);
+        return Math.sqrt(variance);
     }
-    static entropy(arr) {
-        const freq = {};
-        arr.forEach(x => freq[x] = (freq[x] || 0) + 1);
-        return -Object.values(freq).reduce((sum, f) => {
-            const p = f / arr.length;
-            return sum + p * Math.log2(p);
-        }, 0);
-    }
-    static pearsonCorrelation(x, y) {
-        const n = Math.min(x.length, y.length);
-        const mx = MathUtils.mean(x.slice(0, n));
-        const my = MathUtils.mean(y.slice(0, n));
-        let num = 0, den1 = 0, den2 = 0;
-        for (let i = 0; i < n; i++) {
-            const dx = x[i] - mx, dy = y[i] - my;
-            num += dx * dy;
-            den1 += dx * dx;
-            den2 += dy * dy;
+
+    static median(arr) {
+        if (!arr || arr.length === 0) return 0;
+        const sorted = [...arr].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        if (sorted.length % 2 === 0) {
+            return (sorted[mid - 1] + sorted[mid]) / 2;
         }
-        return num / Math.sqrt(den1 * den2);
+        return sorted[mid];
+    }
+
+    static normalRandom(mean = 0, std = 1) {
+        let u = 0, v = 0;
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
+        return mean + std * Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    }
+
+    static clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    static weightedRandom(weights) {
+        const totalWeight = weights.reduce((a, b) => a + b, 0);
+        let random = Math.random() * totalWeight;
+        for (let i = 0; i < weights.length; i++) {
+            random -= weights[i];
+            if (random <= 0) return i;
+        }
+        return weights.length - 1;
     }
 }
 
-// ============================================================
-// PHÂN TÍCH MARKOV BẬC 3
-// ============================================================
-class MarkovChain3 {
-    constructor() {
-        this.transitions = {};
+// ============================================
+// DATA FETCHER
+// ============================================
+class DataFetcher {
+    static async fetchJSON(url) {
+        return new Promise((resolve, reject) => {
+            const protocol = url.startsWith('https') ? https : http;
+            protocol.get(url, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try {
+                        resolve(JSON.parse(data));
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+            }).on('error', reject);
+        });
     }
 
-    train(history) {
-        this.transitions = {};
-        for (let i = 0; i < history.length - 3; i++) {
-            const key = history.slice(i, i + 3).join('_');
-            const next = history[i + 3];
-            if (!this.transitions[key]) this.transitions[key] = { TAI: 0, XIU: 0, total: 0 };
-            this.transitions[key][next]++;
-            this.transitions[key].total++;
+    static async fetchHistory() {
+        try {
+            const data = await DataFetcher.fetchJSON(`${CONFIG.API_BASE}/sessions`);
+            return data;
+        } catch (error) {
+            console.error('Lỗi fetch history:', error.message);
+            return null;
         }
     }
+}
 
-    predict(last3) {
-        const key = last3.join('_');
-        if (this.transitions[key] && this.transitions[key].total > 0) {
-            return {
-                TAI: this.transitions[key].TAI / this.transitions[key].total,
-                XIU: this.transitions[key].XIU / this.transitions[key].total,
-                samples: this.transitions[key].total
+// ============================================
+// ALGORITHM 1: NEURAL WEIGHTED PREDICTION
+// ============================================
+class NeuralWeightedPredictor {
+    static predict(data) {
+        if (data.length < 3) return { prediction: 'TAI', confidence: 50 };
+
+        const weights = { recent_3: 0.35, recent_5: 0.25, recent_10: 0.20, overall: 0.10, pattern: 0.10 };
+        let scores = { TAI: 0, XIU: 0 };
+
+        // 3 phiên gần nhất
+        if (data.length >= 3) {
+            const recent3 = data.slice(0, 3);
+            const tai3 = recent3.filter(d => d.result === 'TAI').length / 3;
+            scores.TAI += tai3 * weights.recent_3;
+            scores.XIU += (1 - tai3) * weights.recent_3;
+        }
+
+        // 5 phiên
+        if (data.length >= 5) {
+            const recent5 = data.slice(0, 5);
+            const tai5 = recent5.filter(d => d.result === 'TAI').length / 5;
+            scores.TAI += tai5 * weights.recent_5;
+            scores.XIU += (1 - tai5) * weights.recent_5;
+        }
+
+        // 10 phiên
+        if (data.length >= 10) {
+            const recent10 = data.slice(0, 10);
+            const tai10 = recent10.filter(d => d.result === 'TAI').length / 10;
+            scores.TAI += tai10 * weights.recent_10;
+            scores.XIU += (1 - tai10) * weights.recent_10;
+        }
+
+        // Tổng thể
+        const allTai = data.filter(d => d.result === 'TAI').length / data.length;
+        scores.TAI += allTai * weights.overall;
+        scores.XIU += (1 - allTai) * weights.overall;
+
+        const prediction = scores.TAI > scores.XIU ? 'TAI' : 'XIU';
+        const confidence = Math.round((Math.max(scores.TAI, scores.XIU) / (scores.TAI + scores.XIU)) * 100);
+
+        return { prediction, confidence, scores };
+    }
+}
+
+// ============================================
+// ALGORITHM 2: MARKOV CHAIN ANALYSIS
+// ============================================
+class MarkovChainPredictor {
+    static buildTransitionMatrix(data, order = 2) {
+        if (data.length < order + 1) return null;
+
+        const transitions = {};
+        const results = data.map(d => d.result);
+
+        for (let i = 0; i < results.length - order; i++) {
+            const state = results.slice(i, i + order).join(',');
+            const nextState = results[i + order];
+
+            if (!transitions[state]) {
+                transitions[state] = { TAI: 0, XIU: 0, total: 0 };
+            }
+            transitions[state][nextState]++;
+            transitions[state].total++;
+        }
+
+        // Convert to probabilities
+        const probabilities = {};
+        for (const [state, counts] of Object.entries(transitions)) {
+            probabilities[state] = {
+                TAI: counts.TAI / counts.total,
+                XIU: counts.XIU / counts.total
             };
         }
-        // Fallback về bậc 2
-        const key2 = last3.slice(1).join('_');
-        for (let k in this.transitions) {
-            if (k.startsWith(key2) && this.transitions[k].total > 0) {
-                return {
-                    TAI: this.transitions[k].TAI / this.transitions[k].total,
-                    XIU: this.transitions[k].XIU / this.transitions[k].total,
-                    samples: this.transitions[k].total
-                };
-            }
-        }
-        return null;
+
+        return probabilities;
+    }
+
+    static predict(data) {
+        if (data.length < 3) return { prediction: 'TAI', confidence: 50 };
+
+        const probs = MarkovChainPredictor.buildTransitionMatrix(data, 2);
+        if (!probs) return { prediction: 'TAI', confidence: 50 };
+
+        const currentState = data.slice(0, 2).map(d => d.result).join(',');
+        const stateProbs = probs[currentState];
+
+        if (!stateProbs) return { prediction: 'TAI', confidence: 50 };
+
+        const prediction = stateProbs.TAI > stateProbs.XIU ? 'TAI' : 'XIU';
+        const confidence = Math.round(Math.max(stateProbs.TAI, stateProbs.XIU) * 100);
+
+        return { prediction, confidence, probabilities: stateProbs };
     }
 }
 
-// ============================================================
-// PHÂN TÍCH PHỔ (FFT ĐƠN GIẢN)
-// ============================================================
-class SpectralAnalysis {
-    static analyze(binarySignal) {
-        const n = binarySignal.length;
-        if (n < 16) return { dominantFreq: 0, power: 0 };
+// ============================================
+// ALGORITHM 3: FIBONACCI RETRACEMENT
+// ============================================
+class FibonacciPredictor {
+    static predict(data) {
+        const fib = [1, 1, 2, 3, 5, 8, 13, 21, 34];
+        let scores = { TAI: 0, XIU: 0 };
 
-        // DFT đơn giản
-        const freqs = [];
-        for (let k = 1; k <= Math.floor(n / 4); k++) {
-            let real = 0, imag = 0;
-            for (let t = 0; t < n; t++) {
-                const angle = (2 * Math.PI * k * t) / n;
-                real += binarySignal[t] * Math.cos(angle);
-                imag -= binarySignal[t] * Math.sin(angle);
+        for (const f of fib) {
+            if (f <= data.length) {
+                const result = data[f - 1].result;
+                scores[result]++;
             }
-            freqs.push({ freq: k, power: Math.sqrt(real * real + imag * imag) / n });
         }
 
-        freqs.sort((a, b) => b.power - a.power);
-        return {
-            dominantFreq: freqs[0].freq,
-            power: freqs[0].power,
-            topFreqs: freqs.slice(0, 3)
-        };
+        const total = scores.TAI + scores.XIU;
+        if (total === 0) return { prediction: 'TAI', confidence: 50 };
+
+        const prediction = scores.TAI > scores.XIU ? 'TAI' : 'XIU';
+        const confidence = Math.round((Math.max(scores.TAI, scores.XIU) / total) * 100);
+
+        return { prediction, confidence, scores };
     }
 }
 
-// ============================================================
-// MẠNG NƠ-RON NHÂN TẠO NHẸ (PERCEPTRON ĐA LỚP)
-// ============================================================
-class MiniNeuralNet {
-    constructor(inputSize = 10, hiddenSize = 16) {
-        // Khởi tạo trọng số ngẫu nhiên
-        this.w1 = Array(inputSize).fill(0).map(() =>
-            Array(hiddenSize).fill(0).map(() => (Math.random() - 0.5) * 0.5)
-        );
-        this.b1 = Array(hiddenSize).fill(0).map(() => (Math.random() - 0.5) * 0.1);
-        this.w2 = Array(hiddenSize).fill(0).map(() => (Math.random() - 0.5) * 0.5);
-        this.b2 = (Math.random() - 0.5) * 0.1;
+// ============================================
+// ALGORITHM 4: ENTROPY ANALYSIS
+// ============================================
+class EntropyPredictor {
+    static calculateEntropy(data, windowSize = 3) {
+        if (data.length < windowSize) return 0;
+
+        const results = data.map(d => d.result);
+        const patterns = new Set();
+
+        for (let i = 0; i <= results.length - windowSize; i++) {
+            patterns.add(results.slice(i, i + windowSize).join(','));
+        }
+
+        const maxPatterns = Math.pow(2, windowSize);
+        return patterns.size / Math.min(maxPatterns, results.length - windowSize + 1);
     }
 
-    forward(features) {
-        // Lớp ẩn
-        const hidden = this.w1.map((w, i) =>
-            MathUtils.relu(features.reduce((sum, f, j) => sum + f * this.w1[j][i], 0) + this.b1[i])
-        );
-        // Lớp output
-        const output = MathUtils.sigmoid(
-            hidden.reduce((sum, h, i) => sum + h * this.w2[i], 0) + this.b2
-        );
-        return output;
-    }
+    static predict(data) {
+        if (data.length < 5) return { prediction: 'TAI', confidence: 50 };
 
-    train(features, target, lr = 0.01) {
-        // Forward
-        const hidden = this.w1.map((w, i) =>
-            features.reduce((sum, f, j) => sum + f * this.w1[j][i], 0) + this.b1[i]
-        );
-        const hiddenAct = hidden.map(MathUtils.relu);
-        const output = MathUtils.sigmoid(
-            hiddenAct.reduce((sum, h, i) => sum + h * this.w2[i], 0) + this.b2
-        );
+        const entropy = EntropyPredictor.calculateEntropy(data, 3);
 
-        // Backward đơn giản (SGD)
-        const error = target - output;
-        const dOutput = error * output * (1 - output);
-
-        // Cập nhật w2, b2
-        for (let i = 0; i < this.w2.length; i++) {
-            this.w2[i] += lr * dOutput * hiddenAct[i];
-        }
-        this.b2 += lr * dOutput;
-
-        // Cập nhật w1, b1
-        for (let i = 0; i < this.w1.length; i++) {
-            for (let j = 0; j < this.w1[i].length; j++) {
-                const dHidden = dOutput * this.w2[j] * (hidden[j] > 0 ? 1 : 0);
-                this.w1[i][j] += lr * dHidden * features[i];
-            }
-        }
-        for (let j = 0; j < this.b1.length; j++) {
-            const dHidden = dOutput * this.w2[j] * (hidden[j] > 0 ? 1 : 0);
-            this.b1[j] += lr * dHidden;
+        if (entropy > 0.7) {
+            // High entropy - random, use recent trend
+            const recent = data.slice(0, 10);
+            const taiCount = recent.filter(d => d.result === 'TAI').length;
+            const prediction = taiCount > 5 ? 'TAI' : 'XIU';
+            return { prediction, confidence: Math.round(Math.abs(taiCount - 5) * 10 + 50), entropy };
+        } else {
+            // Low entropy - follow pattern
+            const recent = data.slice(0, 5);
+            const taiCount = recent.filter(d => d.result === 'TAI').length;
+            const prediction = taiCount >= 3 ? 'TAI' : 'XIU';
+            return { prediction, confidence: Math.round(Math.abs(taiCount - 2.5) * 20 + 50), entropy };
         }
     }
 }
 
-// ============================================================
-// PHÂN TÍCH BAYES
-// ============================================================
-class BayesianAnalyzer {
-    constructor() {
-        this.prior = { TAI: 0.5, XIU: 0.5 };
-    }
+// ============================================
+// ALGORITHM 5: REVERSE PSYCHOLOGY
+// ============================================
+class ReversePsychologyPredictor {
+    static predict(data) {
+        if (data.length < 7) return { prediction: 'TAI', confidence: 50 };
 
-    update(likelihoodTAI, likelihoodXIU) {
-        const posteriorTAI = this.prior.TAI * likelihoodTAI;
-        const posteriorXIU = this.prior.XIU * likelihoodXIU;
-        const sum = posteriorTAI + posteriorXIU;
-        this.prior = {
-            TAI: posteriorTAI / sum,
-            XIU: posteriorXIU / sum
-        };
-        return this.prior;
-    }
+        const recent7 = data.slice(0, 7);
+        const taiCount = recent7.filter(d => d.result === 'TAI').length;
 
-    reset() {
-        this.prior = { TAI: 0.5, XIU: 0.5 };
-    }
-}
-
-// ============================================================
-// PATTERN MATCHING NÂNG CAO
-// ============================================================
-class PatternMatcher {
-    static findSimilar(history, patternLength = PATTERN_DEPTH) {
-        const lastPattern = history.slice(-patternLength);
-        const matches = [];
-
-        for (let i = 0; i < history.length - patternLength - 1; i++) {
-            const candidate = history.slice(i, i + patternLength);
-            let similarity = 0;
-            for (let j = 0; j < patternLength; j++) {
-                if (candidate[j] === lastPattern[j]) similarity++;
-            }
-            if (similarity >= patternLength - 1) {
-                matches.push({
-                    index: i,
-                    similarity: similarity / patternLength,
-                    nextResult: history[i + patternLength]
-                });
-            }
+        let prediction, confidence;
+        if (taiCount >= 5) {
+            prediction = 'XIU';
+            confidence = Math.round((taiCount / 7) * 100);
+        } else if (taiCount <= 2) {
+            prediction = 'TAI';
+            confidence = Math.round(((7 - taiCount) / 7) * 100);
+        } else {
+            prediction = Math.random() > 0.5 ? 'TAI' : 'XIU';
+            confidence = 50;
         }
 
-        if (matches.length === 0) return null;
-
-        const nextResults = matches.map(m => m.nextResult);
-        const countTAI = nextResults.filter(r => r === 'TAI').length;
-        const countXIU = nextResults.filter(r => r === 'XIU').length;
-
-        return {
-            TAI: countTAI / matches.length,
-            XIU: countXIU / matches.length,
-            matchCount: matches.length,
-            avgSimilarity: matches.reduce((s, m) => s + m.similarity, 0) / matches.length
-        };
+        return { prediction, confidence, recentTaiRatio: taiCount / 7 };
     }
 }
 
-// ============================================================
-// MONTE CARLO SIMULATION
-// ============================================================
-class MonteCarlo {
-    static simulate(history, points, simulations = 1000) {
-        const binaryHistory = history.map(h => h === 'TAI' ? 1 : 0);
-        const mu = MathUtils.mean(binaryHistory);
-        const sigma = MathUtils.std(binaryHistory) || 0.3;
+// ============================================
+// ALGORITHM 6: BAYESIAN INFERENCE
+// ============================================
+class BayesianPredictor {
+    static predict(data) {
+        if (data.length < 5) return { prediction: 'TAI', confidence: 50 };
 
-        let taiWins = 0, xiuWins = 0;
+        const priorTAI = 0.5;
+        const priorXIU = 0.5;
+
+        const recent = data.slice(0, Math.min(10, data.length));
+        const taiRecent = recent.filter(d => d.result === 'TAI').length / recent.length;
+        const xiuRecent = 1 - taiRecent;
+
+        const posteriorTAI = priorTAI * taiRecent;
+        const posteriorXIU = priorXIU * xiuRecent;
+        const total = posteriorTAI + posteriorXIU;
+
+        const probTAI = posteriorTAI / total;
+        const probXIU = posteriorXIU / total;
+
+        const prediction = probTAI > probXIU ? 'TAI' : 'XIU';
+        const confidence = Math.round(Math.max(probTAI, probXIU) * 100);
+
+        return { prediction, confidence, probabilities: { TAI: probTAI, XIU: probXIU } };
+    }
+}
+
+// ============================================
+// ALGORITHM 7: MONTE CARLO SIMULATION
+// ============================================
+class MonteCarloPredictor {
+    static predict(data, simulations = 1000) {
+        if (data.length < 10) return { prediction: 'TAI', confidence: 50 };
+
+        const points = data.map(d => d.point);
+        const mean = MathUtils.mean(points);
+        const std = MathUtils.std(points);
+
+        let taiWins = 0;
+        let xiuWins = 0;
 
         for (let i = 0; i < simulations; i++) {
-            // Box-Muller transform
-            const u1 = Math.random();
-            const u2 = Math.random();
-            const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-            const sample = mu + sigma * z;
+            const simulatedPoint = MathUtils.clamp(
+                MathUtils.normalRandom(mean, std),
+                3, 18
+            );
 
-            if (sample >= 0.5) taiWins++;
+            if (simulatedPoint >= 11) taiWins++;
             else xiuWins++;
         }
 
-        return {
-            TAI: taiWins / simulations,
-            XIU: xiuWins / simulations,
-            mu,
-            sigma
-        };
+        const prediction = taiWins > xiuWins ? 'TAI' : 'XIU';
+        const confidence = Math.round((Math.max(taiWins, xiuWins) / simulations) * 100);
+
+        return { prediction, confidence, simulatedRatio: { TAI: taiWins / simulations, XIU: xiuWins / simulations } };
     }
 }
 
-// ============================================================
-// PHÂN TÍCH ENTROPY & ĐỘ HỖN LOẠN
-// ============================================================
-class ChaosAnalysis {
-    static analyze(history) {
-        const entropy = MathUtils.entropy(history);
-        const maxEntropy = 1.0; // log2(2)
-        const chaosLevel = entropy / maxEntropy; // 0 = deterministric, 1 = chaotic
+// ============================================
+// ALGORITHM 8: GOLDEN RATIO PREDICTION
+// ============================================
+class GoldenRatioPredictor {
+    static predict(data) {
+        if (data.length < 10) return { prediction: 'TAI', confidence: 50 };
 
-        // Tính Lyapunov exponent thô
-        const binary = history.map(h => h === 'TAI' ? 1 : 0);
-        let divergence = 0;
-        for (let i = 1; i < binary.length; i++) {
-            if (binary[i] !== binary[i - 1]) divergence++;
+        const phi = (1 + Math.sqrt(5)) / 2;
+        const indices = [0];
+        
+        while (indices[indices.length - 1] + phi < data.length) {
+            indices.push(Math.floor(indices[indices.length - 1] + phi));
         }
-        const lyapunov = divergence / (binary.length - 1);
 
-        return {
-            entropy,
-            chaosLevel,
-            lyapunov,
-            interpretation: chaosLevel > 0.8 ? 'random' : chaosLevel > 0.5 ? 'mixed' : 'predictable'
-        };
+        const goldenResults = indices
+            .filter(i => i < data.length)
+            .map(i => data[i].result);
+
+        const taiCount = goldenResults.filter(r => r === 'TAI').length;
+        const xiuCount = goldenResults.filter(r => r === 'XIU').length;
+        const total = taiCount + xiuCount;
+
+        if (total === 0) return { prediction: 'TAI', confidence: 50 };
+
+        const prediction = taiCount > xiuCount ? 'TAI' : 'XIU';
+        const confidence = Math.round((Math.max(taiCount, xiuCount) / total) * 100);
+
+        return { prediction, confidence, goldenSamples: indices.length };
     }
 }
 
-// ============================================================
-// HỒI QUY PHI TUYẾN (POLYNOMIAL REGRESSION)
-// ============================================================
-class PolynomialRegression {
-    static fit(x, y, degree = 2) {
-        const n = x.length;
-        // Ma trận Vandermonde
-        const A = [];
-        for (let i = 0; i < n; i++) {
-            const row = [];
-            for (let d = 0; d <= degree; d++) {
-                row.push(Math.pow(x[i], d));
-            }
-            A.push(row);
+// ============================================
+// ALGORITHM 9: CHAOS THEORY PREDICTION
+// ============================================
+class ChaosTheoryPredictor {
+    static predict(data) {
+        if (data.length < 15) return { prediction: 'TAI', confidence: 50 };
+
+        const points = data.map(d => d.point);
+        const diffs = [];
+
+        for (let i = 1; i < points.length; i++) {
+            diffs.push(Math.abs(points[i] - points[i - 1]));
         }
 
-        // Giải A^T * A * coeff = A^T * y bằng Gaussian elimination đơn giản
-        const AT = A[0].map((_, col) => A.map(row => row[col]));
-        const ATA = AT.map(row => A[0].map((_, col) =>
-            row.reduce((sum, val, k) => sum + val * A[k][col], 0)
-        ));
-        const ATy = AT.map(row =>
-            row.reduce((sum, val, k) => sum + val * y[k], 0)
-        );
+        const avgDiff = MathUtils.mean(diffs);
 
-        // Giải hệ phương trình
-        const coeffs = this.gaussianElimination(ATA, ATy);
-        return coeffs;
-    }
-
-    static gaussianElimination(A, b) {
-        const n = A.length;
-        const augmented = A.map((row, i) => [...row, b[i]]);
-
-        for (let col = 0; col < n; col++) {
-            let maxRow = col;
-            for (let row = col + 1; row < n; row++) {
-                if (Math.abs(augmented[row][col]) > Math.abs(augmented[maxRow][col])) {
-                    maxRow = row;
-                }
-            }
-            [augmented[col], augmented[maxRow]] = [augmented[maxRow], augmented[col]];
-
-            for (let row = col + 1; row < n; row++) {
-                const factor = augmented[row][col] / augmented[col][col];
-                for (let j = col; j <= n; j++) {
-                    augmented[row][j] -= factor * augmented[col][j];
-                }
-            }
+        if (avgDiff < 2.5) {
+            // Hệ thống ổn định - theo xu hướng
+            const recent3 = data.slice(0, 3);
+            const taiCount = recent3.filter(d => d.result === 'TAI').length;
+            const prediction = taiCount >= 2 ? 'TAI' : 'XIU';
+            return { prediction, confidence: 60 + Math.round(avgDiff * 10), avgDiff };
+        } else {
+            // Hỗn loạn - đảo chiều
+            const lastResult = data[0].result;
+            const prediction = lastResult === 'TAI' ? 'XIU' : 'TAI';
+            return { prediction, confidence: 60 + Math.round((4 - avgDiff) * 10), avgDiff };
         }
-
-        const x = Array(n).fill(0);
-        for (let i = n - 1; i >= 0; i--) {
-            x[i] = augmented[i][n] / augmented[i][i];
-            for (let j = i - 1; j >= 0; j--) {
-                augmented[j][n] -= augmented[j][i] * x[i];
-            }
-        }
-        return x;
-    }
-
-    static predict(coeffs, x) {
-        return coeffs.reduce((sum, c, d) => sum + c * Math.pow(x, d), 0);
     }
 }
 
-// ============================================================
-// TỔNG HỢP ENSEMBLE VỚI TRỌNG SỐ ĐỘNG
-// ============================================================
-class EnsemblePredictor {
-    constructor() {
-        this.markov = new MarkovChain3();
-        this.bayesian = new BayesianAnalyzer();
-        this.neuralNet = new MiniNeuralNet(10, 16);
-        this.performanceHistory = {
-            markov: { correct: 0, total: 0 },
-            spectral: { correct: 0, total: 0 },
-            pattern: { correct: 0, total: 0 },
-            monteCarlo: { correct: 0, total: 0 },
-            trend: { correct: 0, total: 0 },
-            neural: { correct: 0, total: 0 },
-            bayesian: { correct: 0, total: 0 }
-        };
-    }
+// ============================================
+// ALGORITHM 10: STREAK MOMENTUM
+// ============================================
+class StreakMomentumPredictor {
+    static analyze(data) {
+        if (data.length === 0) return { currentStreak: 0, currentType: 'TAI' };
 
-    getDynamicWeights() {
-        const weights = {};
-        for (let key in this.performanceHistory) {
-            const perf = this.performanceHistory[key];
-            if (perf.total > 0) {
-                weights[key] = perf.correct / perf.total;
+        let currentStreak = 1;
+        const currentType = data[0].result;
+
+        for (let i = 1; i < data.length; i++) {
+            if (data[i].result === currentType) {
+                currentStreak++;
             } else {
-                weights[key] = 0.5;
-            }
-        }
-
-        // Chuẩn hóa
-        const total = Object.values(weights).reduce((a, b) => a + b, 0);
-        for (let key in weights) {
-            weights[key] /= total;
-        }
-        return weights;
-    }
-
-    updatePerformance(modelName, predicted, actual) {
-        if (predicted === actual) {
-            this.performanceHistory[modelName].correct++;
-        }
-        this.performanceHistory[modelName].total++;
-    }
-}
-
-// ============================================================
-// TRÍCH XUẤT ĐẶC TRƯNG (FEATURE ENGINEERING)
-// ============================================================
-class FeatureExtractor {
-    static extract(history, points) {
-        const n = history.length;
-        const binary = history.map(h => h === 'TAI' ? 1 : 0);
-        const recentN = Math.min(20, n);
-
-        const features = [];
-
-        // 1. Tỉ lệ TAI trong N phiên gần nhất
-        const recentBinary = binary.slice(-recentN);
-        features.push(MathUtils.mean(recentBinary));
-
-        // 2. Độ lệch chuẩn gần đây
-        features.push(MathUtils.std(recentBinary));
-
-        // 3. Streak hiện tại (chuẩn hóa)
-        let streak = 1;
-        for (let i = n - 2; i >= 0; i--) {
-            if (history[i] === history[n - 1]) streak++;
-            else break;
-        }
-        features.push(Math.min(streak / 10, 1.0));
-
-        // 4. Tỉ lệ đảo chiều
-        let reversals = 0;
-        for (let i = 1; i < n; i++) {
-            if (binary[i] !== binary[i - 1]) reversals++;
-        }
-        features.push(reversals / (n - 1));
-
-        // 5. Điểm trung bình gần đây
-        const recentPoints = points.slice(-10);
-        features.push((MathUtils.mean(recentPoints) - 3) / 15); // Chuẩn hóa về [0,1]
-
-        // 6. Xu hướng điểm
-        const x = Array.from({ length: Math.min(20, n) }, (_, i) => i);
-        const y = points.slice(-Math.min(20, n));
-        const slope = x.length > 1 ?
-            (MathUtils.mean(y.slice(-5)) - MathUtils.mean(y.slice(0, 5))) / Math.min(20, n) : 0;
-        features.push(MathUtils.sigmoid(slope));
-
-        // 7. Entropy
-        features.push(MathUtils.entropy(history.slice(-30)) || 0.5);
-
-        // 8-10. Tương quan giữa các vị trí
-        for (let lag of [1, 2, 3]) {
-            if (n > lag + 5) {
-                const shifted = binary.slice(0, -lag);
-                const original = binary.slice(lag);
-                const corr = MathUtils.pearsonCorrelation(original, shifted);
-                features.push((corr + 1) / 2); // Chuẩn hóa về [0,1]
-            } else {
-                features.push(0.5);
-            }
-        }
-
-        return features;
-    }
-}
-
-// ============================================================
-// HÀM DỰ ĐOÁN CHÍNH - TỔNG HỢP TẤT CẢ
-// ============================================================
-async function fetchData() {
-    const res = await axios.get(API_URL, {
-        headers: {
-            'User-Agent': 'Mozilla/5.0',
-            'Accept': 'application/json'
-        },
-        timeout: 15000
-    });
-    return res.data;
-}
-
-function du_doan_vip(data) {
-    const sessions = data.list || data;
-    const sorted = [...sessions].sort((a, b) => a.id - b.id);
-    const history = sorted.map(s => s.resultTruyenThong);
-    const points = sorted.map(s => s.point);
-    const dices = sorted.map(s => s.dices);
-    const nextId = sorted[sorted.length - 1].id + 1;
-
-    // ==========================================
-    // KHỞI TẠO CÁC BỘ PHÂN TÍCH
-    // ==========================================
-    const ensemble = new EnsemblePredictor();
-    const binary = history.map(h => h === 'TAI' ? 1 : -1);
-
-    // ==========================================
-    // 1. MARKOV BẬC 3
-    // ==========================================
-    ensemble.markov.train(history);
-    const last3 = history.slice(-3);
-    const markovResult = ensemble.markov.predict(last3);
-    let markovTAI = 0.5, markovXIU = 0.5, markovConf = 0.5;
-    if (markovResult) {
-        markovTAI = markovResult.TAI;
-        markovXIU = markovResult.XIU;
-        markovConf = Math.min(markovResult.samples / 20, 1.0);
-    }
-
-    // ==========================================
-    // 2. PHÂN TÍCH PHỔ (SPECTRAL)
-    // ==========================================
-    const spectral = SpectralAnalysis.analyze(binary.slice(-64));
-    let spectralTAI = 0.5, spectralXIU = 0.5, spectralConf = 0.3;
-    if (spectral.power > 0.1) {
-        const period = Math.round(history.length / spectral.dominantFreq);
-        if (period > 0 && period < history.length) {
-            const refIndex = history.length - period;
-            if (refIndex >= 0) {
-                spectralTAI = history[refIndex] === 'TAI' ? 0.7 : 0.3;
-                spectralXIU = 1 - spectralTAI;
-                spectralConf = Math.min(spectral.power * 2, 0.7);
-            }
-        }
-    }
-
-    // ==========================================
-    // 3. PATTERN MATCHING
-    // ==========================================
-    const patternResult = PatternMatcher.findSimilar(history);
-    let patternTAI = 0.5, patternXIU = 0.5, patternConf = 0.4;
-    if (patternResult && patternResult.matchCount >= 2) {
-        patternTAI = patternResult.TAI;
-        patternXIU = patternResult.XIU;
-        patternConf = Math.min(patternResult.matchCount / 10, 0.8);
-    }
-
-    // ==========================================
-    // 4. MONTE CARLO
-    // ==========================================
-    const mc = MonteCarlo.simulate(history, points, 2000);
-    const mcTAI = mc.TAI;
-    const mcXIU = mc.XIU;
-    const mcConf = 0.4 + Math.min(mc.sigma * 0.5, 0.3);
-
-    // ==========================================
-    // 5. PHÂN TÍCH XU HƯỚNG ĐIỂM
-    // ==========================================
-    const recentPts = points.slice(-20);
-    const xVals = Array.from({ length: recentPts.length }, (_, i) => i);
-    const polyCoeffs = PolynomialRegression.fit(xVals, recentPts, 2);
-    const nextPoint = PolynomialRegression.predict(polyCoeffs, recentPts.length);
-    const trendTAI = nextPoint >= 11 ? 0.6 : 0.4;
-    const trendXIU = 1 - trendTAI;
-    const trendConf = 0.5;
-
-    // ==========================================
-    // 6. NEURAL NETWORK
-    // ==========================================
-    const features = FeatureExtractor.extract(history, points);
-    const neuralOutput = ensemble.neuralNet.forward(features);
-    const neuralTAI = neuralOutput;
-    const neuralXIU = 1 - neuralOutput;
-    const neuralConf = 0.45;
-
-    // ==========================================
-    // 7. BAYESIAN UPDATE
-    // ==========================================
-    ensemble.bayesian.reset();
-    const lastResult = history[history.length - 1];
-    let streakLen = 1;
-    for (let i = history.length - 2; i >= 0; i--) {
-        if (history[i] === lastResult) streakLen++;
-        else break;
-    }
-    const likelihoodTAI = lastResult === 'TAI' ?
-        Math.max(0.1, 0.5 - streakLen * 0.03) :
-        Math.min(0.9, 0.5 + streakLen * 0.03);
-    const likelihoodXIU = 1 - likelihoodTAI;
-    const bayesResult = ensemble.bayesian.update(likelihoodTAI, likelihoodXIU);
-    const bayesTAI = bayesResult.TAI;
-    const bayesXIU = bayesResult.XIU;
-    const bayesConf = 0.5;
-
-    // ==========================================
-    // 8. CHAOS ANALYSIS
-    // ==========================================
-    const chaos = ChaosAnalysis.analyze(history.slice(-50));
-    const chaosWeight = chaos.chaosLevel > 0.7 ? 0.5 : 1.0;
-
-    // ==========================================
-    // TỔNG HỢP VỚI TRỌNG SỐ ĐỘNG
-    // ==========================================
-    const baseWeights = {
-        markov: 0.22,
-        spectral: 0.10,
-        pattern: 0.18,
-        monteCarlo: 0.12,
-        trend: 0.15,
-        neural: 0.13,
-        bayesian: 0.10
-    };
-
-    // Điều chỉnh theo chaos
-    for (let key in baseWeights) {
-        baseWeights[key] *= chaosWeight;
-    }
-    const totalW = Object.values(baseWeights).reduce((a, b) => a + b, 0);
-    for (let key in baseWeights) {
-        baseWeights[key] /= totalW;
-    }
-
-    // Trọng số cuối cùng = base * confidence
-    const weightedTAI =
-        markovTAI * baseWeights.markov * markovConf +
-        spectralTAI * baseWeights.spectral * spectralConf +
-        patternTAI * baseWeights.pattern * patternConf +
-        mcTAI * baseWeights.monteCarlo * mcConf +
-        trendTAI * baseWeights.trend * trendConf +
-        neuralTAI * baseWeights.neural * neuralConf +
-        bayesTAI * baseWeights.bayesian * bayesConf;
-
-    const weightedXIU =
-        markovXIU * baseWeights.markov * markovConf +
-        spectralXIU * baseWeights.spectral * spectralConf +
-        patternXIU * baseWeights.pattern * patternConf +
-        mcXIU * baseWeights.monteCarlo * mcConf +
-        trendXIU * baseWeights.trend * trendConf +
-        neuralXIU * baseWeights.neural * neuralConf +
-        bayesXIU * baseWeights.bayesian * bayesConf;
-
-    const sumFinal = weightedTAI + weightedXIU;
-    const finalTAI = weightedTAI / sumFinal;
-    const finalXIU = weightedXIU / sumFinal;
-
-    const prediction = finalTAI >= finalXIU ? 'TAI' : 'XIU';
-    const confidence = Math.round(Math.max(finalTAI, finalXIU) * 10000) / 100;
-
-    // Dự đoán điểm chi tiết
-    const predictedPoint = Math.round(nextPoint * 100) / 100;
-
-    // Dự đoán xúc xắc (tổng hợp từ phân phối)
-    const allDice = dices.flat();
-    const diceFreq = Array(7).fill(0);
-    allDice.forEach(d => diceFreq[d]++);
-    const diceProbs = diceFreq.map(f => f / allDice.length);
-    const predictedDices = [];
-    for (let i = 0; i < 3; i++) {
-        let r = Math.random();
-        let cum = 0;
-        for (let d = 1; d <= 6; d++) {
-            cum += diceProbs[d];
-            if (r <= cum) {
-                predictedDices.push(d);
                 break;
             }
         }
+
+        return { currentStreak, currentType };
     }
 
-    // ==========================================
-    // KẾT QUẢ
-    // ==========================================
-    const ket_qua = {
-        id_phien_du_doan: nextId,
-        du_doan: prediction,
-        do_tin_cay: confidence,
-        diem_du_kien: predictedPoint,
-        xuc_xac_du_kien: predictedDices,
-        ty_le: {
-            TAI: Math.round(finalTAI * 10000) / 100,
-            XIU: Math.round(finalXIU * 10000) / 100
-        },
-        chi_tiet_thuat_toan: {
-            markov_bac_3: {
-                du_doan: markovTAI >= markovXIU ? 'TAI' : 'XIU',
-                ty_le: { TAI: Math.round(markovTAI * 100), XIU: Math.round(markovXIU * 100) },
-                do_tin_cay: Math.round(markovConf * 100),
-                trong_so: Math.round(baseWeights.markov * 100)
-            },
-            phan_tich_pho: {
-                du_doan: spectralTAI >= spectralXIU ? 'TAI' : 'XIU',
-                ty_le: { TAI: Math.round(spectralTAI * 100), XIU: Math.round(spectralXIU * 100) },
-                chu_ky: spectral.dominantFreq,
-                nang_luong: Math.round(spectral.power * 100),
-                trong_so: Math.round(baseWeights.spectral * 100)
-            },
-            pattern_matching: {
-                du_doan: patternTAI >= patternXIU ? 'TAI' : 'XIU',
-                ty_le: { TAI: Math.round(patternTAI * 100), XIU: Math.round(patternXIU * 100) },
-                so_mau_khop: patternResult?.matchCount || 0,
-                trong_so: Math.round(baseWeights.pattern * 100)
-            },
-            monte_carlo: {
-                du_doan: mcTAI >= mcXIU ? 'TAI' : 'XIU',
-                ty_le: { TAI: Math.round(mcTAI * 100), XIU: Math.round(mcXIU * 100) },
-                do_lech_chuan: Math.round(mc.sigma * 100),
-                trong_so: Math.round(baseWeights.monteCarlo * 100)
-            },
-            xu_huong_diem: {
-                du_doan: trendTAI >= trendXIU ? 'TAI' : 'XIU',
-                ty_le: { TAI: Math.round(trendTAI * 100), XIU: Math.round(trendXIU * 100) },
-                diem_du_doan: predictedPoint,
-                trong_so: Math.round(baseWeights.trend * 100)
-            },
-            neural_network: {
-                du_doan: neuralTAI >= neuralXIU ? 'TAI' : 'XIU',
-                ty_le: { TAI: Math.round(neuralTAI * 100), XIU: Math.round(neuralXIU * 100) },
-                trong_so: Math.round(baseWeights.neural * 100)
-            },
-            bayesian: {
-                du_doan: bayesTAI >= bayesXIU ? 'TAI' : 'XIU',
-                ty_le: { TAI: Math.round(bayesTAI * 100), XIU: Math.round(bayesXIU * 100) },
-                trong_so: Math.round(baseWeights.bayesian * 100)
-            },
-            chaos_analysis: {
-                entropy: Math.round(chaos.entropy * 100) / 100,
-                muc_do_hoan_loan: chaos.interpretation,
-                trong_so_dieu_chinh: Math.round(chaosWeight * 100)
+    static predict(data) {
+        const streak = StreakMomentumPredictor.analyze(data);
+
+        if (streak.currentStreak >= 4) {
+            // Chuỗi dài - khả năng đảo chiều cao
+            const prediction = streak.currentType === 'TAI' ? 'XIU' : 'TAI';
+            const confidence = Math.min(90, 50 + streak.currentStreak * 10);
+            return { prediction, confidence, ...streak };
+        } else if (streak.currentStreak >= 2) {
+            // Chuỗi vừa - tiếp tục xu hướng
+            const prediction = streak.currentType;
+            const confidence = 50 + streak.currentStreak * 5;
+            return { prediction, confidence, ...streak };
+        } else {
+            return { prediction: streak.currentType, confidence: 50, ...streak };
+        }
+    }
+}
+
+// ============================================
+// ALGORITHM 11: POINT DISTRIBUTION ANALYSIS
+// ============================================
+class PointDistributionPredictor {
+    static predict(data) {
+        if (data.length < 10) return { prediction: 'TAI', confidence: 50 };
+
+        const points = data.map(d => d.point);
+        const mean = MathUtils.mean(points);
+        const std = MathUtils.std(points);
+        const median = MathUtils.median(points);
+
+        // Sử dụng độ lệch để dự đoán
+        const recentPoints = data.slice(0, 5).map(d => d.point);
+        const recentMean = MathUtils.mean(recentPoints);
+
+        let prediction, confidence;
+
+        if (recentMean > mean + std * 0.5) {
+            // Điểm cao hơn trung bình - dự đoán về trung bình
+            prediction = 'XIU';
+            confidence = Math.round(Math.min(80, 50 + ((recentMean - mean) / std) * 30));
+        } else if (recentMean < mean - std * 0.5) {
+            // Điểm thấp hơn trung bình - dự đoán về trung bình
+            prediction = 'TAI';
+            confidence = Math.round(Math.min(80, 50 + ((mean - recentMean) / std) * 30));
+        } else {
+            // Gần trung bình - theo xu hướng gần nhất
+            const lastResult = data[0].result;
+            prediction = lastResult;
+            confidence = 55;
+        }
+
+        return { prediction, confidence, statistics: { mean, std, median, recentMean } };
+    }
+}
+
+// ============================================
+// ALGORITHM 12: CYCLE DETECTION
+// ============================================
+class CycleDetectionPredictor {
+    static detectCycle(data, maxCycle = 10) {
+        if (data.length < 20) return null;
+
+        const results = data.map(d => d.result);
+        let bestCycle = null;
+        let bestAccuracy = 0;
+
+        for (let cycleLen = 2; cycleLen <= maxCycle; cycleLen++) {
+            let correct = 0;
+            let total = 0;
+
+            for (let i = cycleLen; i < results.length; i++) {
+                if (results[i] === results[i % cycleLen]) {
+                    correct++;
+                }
+                total++;
             }
-        },
-        thong_ke_phien: {
-            tong_phien: history.length,
-            so_TAI: history.filter(h => h === 'TAI').length,
-            so_XIU: history.filter(h => h === 'XIU').length,
-            streak_hien_tai: streakLen,
-            ket_qua_gan_nhat: lastResult
-        },
-        timestamp: new Date().toISOString()
-    };
 
-    return ket_qua;
-}
+            const accuracy = total > 0 ? correct / total : 0;
 
-// ============================================================
-// CHẠY
-// ============================================================
-async function run() {
-    try {
-        const data = await fetchData();
-        const result = du_doan_vip(data);
+            if (accuracy > bestAccuracy) {
+                bestAccuracy = accuracy;
+                bestCycle = cycleLen;
+            }
+        }
 
-        console.log(JSON.stringify(result, null, 2));
-        return result;
+        if (bestAccuracy > 0.55) {
+            return {
+                cycleLength: bestCycle,
+                accuracy: bestAccuracy,
+                nextPrediction: results[results.length % bestCycle]
+            };
+        }
 
-    } catch (err) {
-        console.error('Loi:', err.message);
+        return null;
+    }
+
+    static predict(data) {
+        const cycle = CycleDetectionPredictor.detectCycle(data);
+
+        if (cycle) {
+            return {
+                prediction: cycle.nextPrediction,
+                confidence: Math.round(cycle.accuracy * 100),
+                cycle
+            };
+        }
+
+        return { prediction: 'TAI', confidence: 50, cycle: null };
     }
 }
 
-run();
+// ============================================
+// ENSEMBLE PREDICTOR - TỔNG HỢP TẤT CẢ THUẬT TOÁN
+// ============================================
+class EnsemblePredictor {
+    static predict(data) {
+        const predictors = [
+            { name: 'Neural Weighted', predictor: NeuralWeightedPredictor, weight: 0.18 },
+            { name: 'Markov Chain', predictor: MarkovChainPredictor, weight: 0.12 },
+            { name: 'Fibonacci', predictor: FibonacciPredictor, weight: 0.08 },
+            { name: 'Entropy', predictor: EntropyPredictor, weight: 0.12 },
+            { name: 'Reverse Psychology', predictor: ReversePsychologyPredictor, weight: 0.08 },
+            { name: 'Bayesian', predictor: BayesianPredictor, weight: 0.10 },
+            { name: 'Monte Carlo', predictor: MonteCarloPredictor, weight: 0.10 },
+            { name: 'Golden Ratio', predictor: GoldenRatioPredictor, weight: 0.05 },
+            { name: 'Chaos Theory', predictor: ChaosTheoryPredictor, weight: 0.05 },
+            { name: 'Streak Momentum', predictor: StreakMomentumPredictor, weight: 0.07 },
+            { name: 'Point Distribution', predictor: PointDistributionPredictor, weight: 0.03 },
+            { name: 'Cycle Detection', predictor: CycleDetectionPredictor, weight: 0.02 }
+        ];
 
-module.exports = { du_doan_vip, fetchData };
+        const results = [];
+        let totalWeight = 0;
+        let scores = { TAI: 0, XIU: 0 };
+
+        for (const { name, predictor, weight } of predictors) {
+            try {
+                const result = predictor.predict(data);
+                results.push({ name, ...result, weight });
+                scores[result.prediction] += weight * (result.confidence / 100);
+                totalWeight += weight;
+            } catch (e) {
+                console.error(`Lỗi predictor ${name}:`, e.message);
+            }
+        }
+
+        // Chuẩn hóa scores
+        if (totalWeight > 0) {
+            scores.TAI /= totalWeight;
+            scores.XIU /= totalWeight;
+        }
+
+        const prediction = scores.TAI > scores.XIU ? 'TAI' : 'XIU';
+        const confidence = Math.round(
+            (Math.max(scores.TAI, scores.XIU) / (scores.TAI + scores.XIU)) * 100
+        );
+
+        return {
+            prediction,
+            confidence,
+            scores: {
+                TAI: Math.round(scores.TAI * 100),
+                XIU: Math.round(scores.XIU * 100)
+            },
+            individualResults: results
+        };
+    }
+}
+
+// ============================================
+// MAIN PREDICTOR CLASS
+// ============================================
+class SuperVIPPredictor {
+    constructor() {
+        this.sessionData = null;
+        this.history = [];
+        this.lastPrediction = null;
+        this.stats = { TAI: 0, XIU: 0 };
+    }
+
+    async fetchHistory() {
+        const data = await DataFetcher.fetchHistory();
+        if (data && data.list) {
+            this.sessionData = data;
+            this.history = data.list.map(session => ({
+                id: session.id,
+                result: session.resultTruyenThong,
+                dices: session.dices,
+                point: session.point
+            }));
+            this.stats = data.typeStat || { TAI: 0, XIU: 0 };
+            return true;
+        }
+        return false;
+    }
+
+    predict() {
+        if (this.history.length === 0) {
+            return { prediction: 'TAI', confidence: 50, error: 'Không có dữ liệu' };
+        }
+
+        const ensembleResult = EnsemblePredictor.predict(this.history);
+        const nextId = this.history.length > 0 ? this.history[0].id + 1 : 1;
+
+        this.lastPrediction = {
+            id: nextId,
+            timestamp: new Date().toISOString(),
+            ...ensembleResult,
+            stats: this.stats,
+            historyCount: this.history.length
+        };
+
+        return this.lastPrediction;
+    }
+
+    async predictAndReturn() {
+        await this.fetchHistory();
+        return this.predict();
+    }
+}
+
+// ============================================
+// HTML TEMPLATE - GIAO DIỆN WEB
+// ============================================
+function getHTMLTemplate(predictionData, historyData) {
+    const duDoan = predictionData || {};
+    const history = historyData || [];
+    
+    const historyRows = history.slice(0, 50).map((item, index) => {
+        const resultColor = item.result === 'TAI' ? '#00ff88' : '#ff4444';
+        const resultBg = item.result === 'TAI' ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,68,0.1)';
+        const dicesStr = item.dices ? item.dices.join(', ') : 'N/A';
+        
+        return `
+            <tr style="background: ${index % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.05)'}">
+                <td style="color: #888;">#${item.id}</td>
+                <td style="color: ${resultColor}; font-weight: bold;">${item.result}</td>
+                <td style="color: #ffd700;">${item.point}</td>
+                <td style="color: #ccc;">[${dicesStr}]</td>
+            </tr>
+        `;
+    }).join('');
+
+    const individualAlgoHTML = duDoan.individualResults ? duDoan.individualResults.map(algo => {
+        const algoColor = algo.prediction === 'TAI' ? '#00ff88' : '#ff4444';
+        return `
+            <div class="algo-item">
+                <span class="algo-name">${algo.name}</span>
+                <span class="algo-prediction" style="color: ${algoColor};">${algo.prediction}</span>
+                <span class="algo-confidence">${algo.confidence || 0}%</span>
+                <div class="algo-bar">
+                    <div class="algo-bar-fill" style="width: ${algo.confidence || 0}%; background: ${algoColor};"></div>
+                </div>
+            </div>
+        `;
+    }).join('') : '';
+
+    const predictionColor = duDoan.prediction === 'TAI' ? '#00ff88' : '#ff4444';
+    const predictionGlow = duDoan.prediction === 'TAI' ? '0 0 30px rgba(0,255,136,0.5)' : '0 0 30px rgba(255,68,68,0.5)';
+
+    return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔮 SUPER VIP AI PREDICTOR - TÀI XỈU</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        @keyframes glow {
+            0%, 100% { box-shadow: ${predictionGlow}; }
+            50% { box-shadow: 0 0 50px ${duDoan.prediction === 'TAI' ? 'rgba(0,255,136,0.8)' : 'rgba(255,68,68,0.8)'}; }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        body {
+            font-family: 'Segoe UI', 'Courier New', monospace;
+            background: linear-gradient(135deg, #0a0a0a, #1a1a2e, #16213e, #0a0a0a);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            color: #fff;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            padding: 30px 0;
+            animation: slideIn 0.8s ease;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            background: linear-gradient(45deg, #ffd700, #ff6b6b, #00ff88, #ffd700);
+            background-size: 300% 300%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: gradientBG 3s ease infinite;
+            text-shadow: none;
+        }
+        
+        .header .subtitle {
+            color: #888;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        @media (max-width: 768px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+            .header h1 {
+                font-size: 1.5em;
+            }
+        }
+        
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .prediction-card {
+            text-align: center;
+            grid-column: 1 / -1;
+            animation: slideIn 0.6s ease;
+        }
+        
+        .prediction-result {
+            font-size: 4em;
+            font-weight: 900;
+            margin: 20px 0;
+            animation: pulse 2s ease-in-out infinite;
+            letter-spacing: 5px;
+        }
+        
+        .prediction-id {
+            color: #ffd700;
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+        
+        .confidence-bar {
+            width: 100%;
+            height: 30px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            border-radius: 15px;
+            transition: width 1s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+        
+        .score-row {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+        }
+        
+        .score-item {
+            text-align: center;
+        }
+        
+        .score-value {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        
+        .score-label {
+            color: #888;
+            font-size: 0.8em;
+        }
+        
+        .section-title {
+            color: #ffd700;
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 215, 0, 0.3);
+            padding-bottom: 10px;
+        }
+        
+        .algo-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.85em;
+        }
+        
+        .algo-name {
+            flex: 1;
+            color: #aaa;
+        }
+        
+        .algo-prediction {
+            width: 50px;
+            font-weight: bold;
+            text-align: center;
+        }
+        
+        .algo-confidence {
+            width: 50px;
+            text-align: right;
+            color: #888;
+        }
+        
+        .algo-bar {
+            width: 80px;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            margin-left: 10px;
+            overflow: hidden;
+        }
+        
+        .algo-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+        
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+        }
+        
+        .history-table th {
+            color: #ffd700;
+            padding: 12px 8px;
+            text-align: left;
+            border-bottom: 2px solid rgba(255, 215, 0, 0.3);
+            position: sticky;
+            top: 0;
+            background: rgba(10, 10, 10, 0.95);
+        }
+        
+        .history-table td {
+            padding: 10px 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .history-scroll {
+            max-height: 500px;
+            overflow-y: auto;
+            border-radius: 10px;
+        }
+        
+        .history-scroll::-webkit-scrollbar {
+            width: 5px;
+        }
+        
+        .history-scroll::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+        
+        .history-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 215, 0, 0.3);
+            border-radius: 10px;
+        }
+        
+        .stats-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            margin: 5px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        
+        .badge-tai {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+            border: 1px solid rgba(0, 255, 136, 0.3);
+        }
+        
+        .badge-xiu {
+            background: rgba(255, 68, 68, 0.2);
+            color: #ff4444;
+            border: 1px solid rgba(255, 68, 68, 0.3);
+        }
+        
+        .refresh-btn {
+            background: linear-gradient(45deg, #ffd700, #ffaa00);
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 20px auto;
+            display: block;
+        }
+        
+        .refresh-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(255, 215, 0, 0.4);
+        }
+        
+        .timer {
+            text-align: center;
+            color: #888;
+            font-size: 0.8em;
+            margin-top: 10px;
+        }
+        
+        .dice-display {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin: 15px 0;
+        }
+        
+        .dice {
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #555;
+            font-size: 0.8em;
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔮 SUPER VIP AI PREDICTOR</h1>
+            <p class="subtitle">Hệ thống dự đoán TÀI/XỈU bằng 12 thuật toán AI</p>
+            <p class="subtitle">Cập nhật mỗi 5 giây | <span id="current-time">--</span></p>
+        </div>
+        
+        <div class="main-grid">
+            <!-- DỰ ĐOÁN CHÍNH -->
+            <div class="card prediction-card">
+                <div class="prediction-id">🎯 Phiên #${duDoan.id || '---'}</div>
+                <div class="prediction-result" style="color: ${predictionColor}; text-shadow: ${predictionGlow};">
+                    ${duDoan.prediction || '---'}
+                </div>
+                
+                <div class="confidence-bar">
+                    <div class="confidence-fill" style="width: ${duDoan.confidence || 0}%; background: ${predictionColor};">
+                        ${duDoan.confidence || 0}% ĐỘ TIN CẬY
+                    </div>
+                </div>
+                
+                <div class="score-row">
+                    <div class="score-item">
+                        <div class="score-value" style="color: #00ff88;">${duDoan.scores ? duDoan.scores.TAI : 0}%</div>
+                        <div class="score-label">TÀI</div>
+                    </div>
+                    <div class="score-item">
+                        <div class="score-value" style="color: #ffd700;">VS</div>
+                        <div class="score-label">───</div>
+                    </div>
+                    <div class="score-item">
+                        <div class="score-value" style="color: #ff4444;">${duDoan.scores ? duDoan.scores.XIU : 0}%</div>
+                        <div class="score-label">XỈU</div>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 20px;">
+                    <span class="stats-badge badge-tai">TÀI: ${duDoan.stats ? duDoan.stats.TAI : 0}</span>
+                    <span class="stats-badge badge-xiu">XỈU: ${duDoan.stats ? duDoan.stats.XIU : 0}</span>
+                    <span class="stats-badge" style="background: rgba(255,215,0,0.2); color: #ffd700; border: 1px solid rgba(255,215,0,0.3);">
+                        Tổng: ${(duDoan.stats ? (duDoan.stats.TAI || 0) + (duDoan.stats.XIU || 0) : 0)} phiên
+                    </span>
+                </div>
+            </div>
+            
+            <!-- PHÂN TÍCH THUẬT TOÁN -->
+            <div class="card">
+                <div class="section-title">🧠 12 THUẬT TOÁN AI</div>
+                ${individualAlgoHTML}
+            </div>
+            
+            <!-- LỊCH SỬ -->
+            <div class="card">
+                <div class="section-title">📜 LỊCH SỬ PHIÊN (${history.length} phiên gần nhất)</div>
+                <div class="history-scroll">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>KẾT QUẢ</th>
+                                <th>ĐIỂM</th>
+                                <th>XÚC XẮC</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${historyRows}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <button class="refresh-btn" onclick="location.reload()">🔄 CẬP NHẬT DỰ ĐOÁN</button>
+        <div class="timer">⏳ Tự động cập nhật sau <span id="countdown">5</span> giây</div>
+        
+        <div class="footer">
+            <p>⚠️ Chỉ dùng tham khảo trong môi trường Lab kiểm thử bảo mật</p>
+            <p>Super VIP AI Predictor v3.0 | Powered by 12 AI Algorithms</p>
+        </div>
+    </div>
+    
+    <script>
+        // Auto refresh countdown
+        let countdown = 5;
+        const countdownEl = document.getElementById('countdown');
+        const timeEl = document.getElementById('current-time');
+        
+        function updateTime() {
+            const now = new Date();
+            timeEl.textContent = now.toLocaleTimeString('vi-VN');
+        }
+        
+        updateTime();
+        setInterval(updateTime, 1000);
+        
+        setInterval(() => {
+            countdown--;
+            countdownEl.textContent = countdown;
+            if (countdown <= 0) {
+                location.reload();
+            }
+        }, 1000);
+    </script>
+</body>
+</html>`;
+}
+
+// ============================================
+// HTTP SERVER
+// ============================================
+class PredictionServer {
+    constructor() {
+        this.predictor = new SuperVIPPredictor();
+        this.server = null;
+    }
+
+    async handleRequest(req, res) {
+        const parsedUrl = url.parse(req.url, true);
+        const pathname = parsedUrl.pathname;
+
+        // CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+        if (req.method === 'OPTIONS') {
+            res.writeHead(204);
+            res.end();
+            return;
+        }
+
+        try {
+            if (pathname === '/' || pathname === '/index.html') {
+                // Trang chính - Render giao diện
+                await this.predictor.fetchHistory();
+                const prediction = this.predictor.predict();
+                const html = getHTMLTemplate(prediction, this.predictor.history);
+                
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(html);
+                
+            } else if (pathname === '/api/predict') {
+                // API JSON dự đoán
+                const prediction = await this.predictor.predictAndReturn();
+                
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({
+                    success: true,
+                    data: prediction,
+                    timestamp: new Date().toISOString()
+                }, null, 2));
+                
+            } else if (pathname === '/api/history') {
+                // API JSON lịch sử
+                await this.predictor.fetchHistory();
+                
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({
+                    success: true,
+                    data: {
+                        history: this.predictor.history.slice(0, 100),
+                        stats: this.predictor.stats,
+                        total: this.predictor.history.length
+                    },
+                    timestamp: new Date().toISOString()
+                }, null, 2));
+                
+            } else {
+                // 404
+                res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end('<h1>404 - Not Found</h1><p>Thử <a href="/">trang chủ</a></p>');
+            }
+            
+        } catch (error) {
+            console.error('Server error:', error);
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+    }
+
+    start(port = CONFIG.PORT) {
+        this.server = http.createServer((req, res) => this.handleRequest(req, res));
+        
+        this.server.listen(port, () => {
+            console.log('╔══════════════════════════════════════════════╗');
+            console.log('║   🔮 SUPER VIP AI PREDICTOR - TÀI XỈU     ║');
+            console.log('╠══════════════════════════════════════════════╣');
+            console.log(`║   🌐 Server: http://localhost:${port}          ║`);
+            console.log(`║   📊 API: http://localhost:${port}/api/predict ║`);
+            console.log(`║   📜 History: http://localhost:${port}/api/history ║`);
+            console.log('║   🧠 12 Thuật toán AI Ensemble            ║');
+            console.log('╚══════════════════════════════════════════════╝');
+            
+            // Tự động mở browser
+            try {
+                const { exec } = require('child_process');
+                const platform = process.platform;
+                let command;
+                
+                if (platform === 'win32') {
+                    command = `start http://localhost:${port}`;
+                } else if (platform === 'darwin') {
+                    command = `open http://localhost:${port}`;
+                } else {
+                    command = `xdg-open http://localhost:${port}`;
+                }
+                
+                exec(command);
+            } catch (e) {
+                console.log(`👉 Mở trình duyệt: http://localhost:${port}`);
+            }
+        });
+    }
+}
+
+// ============================================
+// START SERVER
+// ============================================
+const server = new PredictionServer();
+server.start(CONFIG.PORT);
+
+// Export cho module khác dùng
+module.exports = {
+    SuperVIPPredictor,
+    EnsemblePredictor,
+    NeuralWeightedPredictor,
+    MarkovChainPredictor,
+    FibonacciPredictor,
+    EntropyPredictor,
+    ReversePsychologyPredictor,
+    BayesianPredictor,
+    MonteCarloPredictor,
+    GoldenRatioPredictor,
+    ChaosTheoryPredictor,
+    StreakMomentumPredictor,
+    PointDistributionPredictor,
+    CycleDetectionPredictor,
+    PredictionServer,
+    CONFIG
+};
