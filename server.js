@@ -1,3 +1,4 @@
+
 const http = require('http');
 const https = require('https');
 const url = require('url');
@@ -567,4 +568,205 @@ function renderHTML(prediction, history, stats) {
         }
         
         .algo-row{
-            display:flex;align-items:center;paddi
+            display:flex;align-items:center;padding:8px 0;
+            border-bottom:1px solid rgba(255,255,255,0.04);
+            font-size:.85em;
+        }
+        .algo-num{
+            width:25px;color:#555;
+        }
+        .algo-name{flex:1;color:#aaa}
+        .algo-pred{width:45px;font-weight:bold;text-align:center}
+        .algo-conf{width:45px;text-align:right;color:#888}
+        .mini-bar{
+            width:70px;height:4px;
+            background:rgba(255,255,255,0.1);
+            border-radius:2px;margin-left:10px;overflow:hidden;
+        }
+        .mini-fill{height:100%;border-radius:2px;transition:width .5s}
+        
+        .history-scroll{max-height:450px;overflow-y:auto;border-radius:10px}
+        .history-scroll::-webkit-scrollbar{width:4px}
+        .history-scroll::-webkit-scrollbar-track{background:rgba(255,255,255,0.03)}
+        .history-scroll::-webkit-scrollbar-thumb{background:rgba(255,215,0,0.3);border-radius:4px}
+        
+        table{width:100%;border-collapse:collapse;font-size:.85em}
+        th{color:#ffd700;padding:12px 10px;text-align:left;border-bottom:2px solid rgba(255,215,0,0.3);position:sticky;top:0;background:#1a1a2e}
+        td{padding:10px;border-bottom:1px solid rgba(255,255,255,0.04)}
+        
+        .refresh-btn{
+            display:block;margin:25px auto;
+            background:linear-gradient(45deg,#ffd700,#ffaa00);
+            color:#000;border:none;padding:14px 35px;
+            border-radius:30px;font-size:1em;font-weight:bold;
+            cursor:pointer;transition:all .3s;
+        }
+        .refresh-btn:hover{transform:scale(1.05);box-shadow:0 5px 25px rgba(255,215,0,0.4)}
+        
+        .footer{text-align:center;padding:20px;color:#555;font-size:.75em}
+        
+        .vote-box{
+            display:flex;justify-content:center;gap:20px;margin:15px 0;
+            font-size:.9em;color:#888;
+        }
+        .vote-box span{font-weight:bold}
+        .vote-tai{color:#00ff88}
+        .vote-xiu{color:#ff4444}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔮 SUPER VIP AI PREDICTOR</h1>
+            <p class="sub">6 Thuật toán AI Ensemble | Phân tích chuyên sâu TÀI/XỈU</p>
+        </div>
+        
+        <!-- DỰ ĐOÁN CHÍNH -->
+        <div class="prediction-box">
+            <div class="pred-id">🎯 DỰ ĐOÁN PHIÊN #${prediction.nextId || '---'}</div>
+            <div class="pred-result" style="color:${predColor};text-shadow:${predGlow}">
+                ${prediction.prediction}
+            </div>
+            <div class="conf-bar">
+                <div class="conf-fill" style="width:${prediction.confidence}%;background:${predColor}">
+                    ĐỘ TIN CẬY: ${prediction.confidence}%
+                </div>
+            </div>
+            <div class="score-row">
+                <div>
+                    <div class="score-tai">${prediction.scoreTAI}%</div>
+                    <small style="color:#888">TÀI</small>
+                </div>
+                <div class="score-vs">VS</div>
+                <div>
+                    <div class="score-xiu">${prediction.scoreXIU}%</div>
+                    <small style="color:#888">XỈU</small>
+                </div>
+            </div>
+            <div class="vote-box">
+                🗳 Thuật toán bầu: 
+                <span class="vote-tai">${prediction.voteCount.TAI} TÀI</span> | 
+                <span class="vote-xiu">${prediction.voteCount.XIU} XỈU</span>
+            </div>
+            <div class="stats-row">
+                <span class="badge badge-tai">TÀI: ${stats.TAI}</span>
+                <span class="badge badge-xiu">XỈU: ${stats.XIU}</span>
+                <span class="badge badge-total">TỔNG: ${stats.TAI + stats.XIU} phiên</span>
+            </div>
+        </div>
+        
+        <div class="grid-2">
+            <!-- THUẬT TOÁN -->
+            <div class="card">
+                <div class="card-title">🧠 6 THUẬT TOÁN PHÂN TÍCH</div>
+                ${algoHTML}
+            </div>
+            
+            <!-- LỊCH SỬ -->
+            <div class="card">
+                <div class="card-title">📜 LỊCH SỬ PHIÊN</div>
+                <div class="history-scroll">
+                    <table>
+                        <thead><tr><th>ID</th><th>KQ</th><th>ĐIỂM</th><th>XÚC XẮC</th></tr></thead>
+                        <tbody>${historyRows}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <button class="refresh-btn" onclick="location.reload()">🔄 DỰ ĐOÁN LẠI</button>
+        <div class="footer">
+            <p>⚠️ Công cụ phân tích Lab - Chỉ mang tính tham khảo</p>
+            <p>Super VIP AI Predictor v4.0 | 6 Algorithms Ensemble</p>
+        </div>
+    </div>
+</body>
+</html>`;
+}
+
+// ============================================
+// HTTP SERVER
+// ============================================
+const server = http.createServer(async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        return res.end();
+    }
+
+    const parsedUrl = url.parse(req.url, true);
+    const pathname = parsedUrl.pathname;
+
+    try {
+        if (pathname === '/vanhoa') {
+            // API JSON dự đoán
+            const data = await fetchHistory();
+            if (!data) {
+                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                return res.end(JSON.stringify({ error: 'Không thể lấy dữ liệu' }));
+            }
+
+            const prediction = EnsemblePredictor.predict(data.list);
+            const nextId = data.list.length > 0 ? data.list[0].id + 1 : 1;
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+                success: true,
+                nextId,
+                prediction: prediction.prediction,
+                confidence: prediction.confidence,
+                scoreTAI: prediction.scoreTAI,
+                scoreXIU: prediction.scoreXIU,
+                voteCount: prediction.voteCount,
+                algorithms: prediction.algorithms.map(a => ({
+                    name: a.name,
+                    prediction: a.prediction,
+                    confidence: a.confidence
+                })),
+                stats: data.stats
+            }, null, 2));
+
+        } else {
+            // Trang HTML chính
+            const data = await fetchHistory();
+            if (!data) {
+                res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+                return res.end('<h1>Lỗi kết nối API</h1>');
+            }
+
+            const prediction = EnsemblePredictor.predict(data.list);
+            const nextId = data.list.length > 0 ? data.list[0].id + 1 : 1;
+            
+            const predictionWithId = {
+                ...prediction,
+                nextId
+            };
+
+            const html = renderHTML(predictionWithId, data.list, data.stats);
+            
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(html);
+        }
+
+    } catch (e) {
+        console.error('Server error:', e);
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: e.message }));
+    }
+});
+
+// ============================================
+// START
+// ============================================
+server.listen(CONFIG.PORT, () => {
+    console.log('╔══════════════════════════════════════╗');
+    console.log('║  🔮 SUPER VIP AI PREDICTOR v4.0  ║');
+    console.log('╠══════════════════════════════════════╣');
+    console.log(`║  🌐 Web: http://localhost:${CONFIG.PORT}   ║`);
+    console.log(`║  📡 API: http://localhost:${CONFIG.PORT}/vanhoa ║`);
+    console.log('║  🧠 6 Thuật toán AI Ensemble     ║');
+    console.log('╚══════════════════════════════════════╝');
+});
