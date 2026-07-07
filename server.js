@@ -2,466 +2,249 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
-const crypto = require('crypto');
 
-// ============================================
-// CONFIG
-// ============================================
 const CONFIG = {
     API_BASE: 'https://wtxmd52.tele68.com/v1/txmd5',
-    PORT: 8080
+    PORT: process.env.PORT || 8080
 };
 
 // ============================================
 // UTILS
 // ============================================
-class Utils {
-    static mean(arr) {
-        if (!arr || arr.length === 0) return 0;
-        return arr.reduce((a, b) => a + b, 0) / arr.length;
-    }
+function mean(arr) { return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function std(arr) { const m=mean(arr); return Math.sqrt(arr.reduce((s,x)=>s+(x-m)**2,0)/(arr.length-1)); }
+function fetchJSON(url) {
+    return new Promise((resolve, reject) => {
+        (url.startsWith('https')?https:http).get(url, res => {
+            let d='';
+            res.on('data',c=>d+=c);
+            res.on('end',()=>{ try{resolve(JSON.parse(d))}catch(e){reject(e)} });
+        }).on('error',reject);
+    });
+}
 
-    static std(arr) {
-        if (!arr || arr.length < 2) return 0;
-        const m = Utils.mean(arr);
-        return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / (arr.length - 1));
+// ============================================
+// THUẬT TOÁN 1: BẮT CẦU BỆT - DỰA VÀO CẦU ĐANG CHẠY
+// ============================================
+function alg1_BatCauBet(history) {
+    const res = history.map(h=>h.result);
+    // Tìm cầu bệt dài nhất đang chạy
+    let bet = 1, type = res[0];
+    for(let i=1;i<res.length;i++) {
+        if(res[i]===type) bet++; else break;
     }
+    // Nếu bệt >=3 thì bắt tiếp, nếu bệt >=5 thì gãy
+    if(bet >= 5) return {pred: type==='TAI'?'XIU':'TAI', conf: 75, reason: `Bệt ${bet} dài -> bắt gãy`};
+    if(bet >= 3) return {pred: type, conf: 65, reason: `Bệt ${bet} -> bắt tiếp`};
+    return {pred: type, conf: 52, reason: `Bệt ${bet} ngắn -> theo đà`};
+}
 
-    static median(arr) {
-        if (!arr || arr.length === 0) return 0;
-        const sorted = [...arr].sort((a, b) => a - b);
-        const mid = Math.floor(sorted.length / 2);
-        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+// ============================================
+// THUẬT TOÁN 2: CẦU 1-1 (ĐẢO CHIỀU LIÊN TỤC)
+// ============================================
+function alg2_Cau11(history) {
+    const res = history.map(h=>h.result);
+    let count11 = 0;
+    for(let i=1;i<Math.min(res.length,10);i++) {
+        if(res[i] !== res[i-1]) count11++;
     }
+    const rate = count11 / Math.min(res.length-1, 9);
+    if(rate >= 0.7) return {pred: res[0]==='TAI'?'XIU':'TAI', conf: 70, reason: `Cầu 1-1 rõ (${Math.round(rate*100)}%) -> đảo`};
+    if(rate <= 0.3) return {pred: res[0], conf: 65, reason: `Ít đảo (${Math.round(rate*100)}%) -> theo đà`};
+    return {pred: res[0]==='TAI'?'XIU':'TAI', conf: 55, reason: `Tỉ lệ đảo ${Math.round(rate*100)}% -> đoán đảo`};
+}
 
-    static fetchJSON(url) {
-        return new Promise((resolve, reject) => {
-            const protocol = url.startsWith('https') ? https : http;
-            protocol.get(url, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    try { resolve(JSON.parse(data)); }
-                    catch (e) { reject(e); }
-                });
-            }).on('error', reject);
-        });
-    }
+// ============================================
+// THUẬT TOÁN 3: SOI ĐIỂM - BẮT ĐIỂM CAO/THẤP
+// ============================================
+function alg3_SoiDiem(history) {
+    const pts = history.map(h=>h.point);
+    const m = mean(pts);
+    const s = std(pts);
+    const r5 = mean(pts.slice(0,5));
+    const r3 = mean(pts.slice(0,3));
+    
+    // Điểm đang bay cao -> sắp hạ
+    if(r3 > m + s*0.5 && r5 > m + s*0.3) return {pred: 'XIU', conf: 72, reason: `Điểm cao (${r3.toFixed(1)}) -> đoán XIU`};
+    // Điểm đang thấp -> sắp tăng
+    if(r3 < m - s*0.5 && r5 < m - s*0.3) return {pred: 'TAI', conf: 72, reason: `Điểm thấp (${r3.toFixed(1)}) -> đoán TAI`};
+    // Điểm gần TB -> theo trend
+    if(r3 > m) return {pred: 'TAI', conf: 58, reason: `Điểm trên TB -> TAI`};
+    return {pred: 'XIU', conf: 58, reason: `Điểm dưới TB -> XIU`};
+}
 
-    static count(arr, key, val) {
-        return arr.filter(x => x[key] === val).length;
-    }
+// ============================================
+// THUẬT TOÁN 4: SOI XÚC XẮC - CON NÀO ĐANG HOT
+// ============================================
+function alg4_SoiXucXac(history) {
+    const all = [];
+    history.forEach(h=>{ if(h.dices) h.dices.forEach(d=>all.push(d)); });
+    const freq = {};
+    all.forEach(d=>{ freq[d]=(freq[d]||0)+1; });
+    
+    // 3 con xuất hiện nhiều nhất
+    const sorted = Object.entries(freq).sort((a,b)=>b[1]-a[1]);
+    const hot3 = sorted.slice(0,3).map(e=>parseInt(e[0]));
+    const hotAvg = mean(hot3);
+    
+    if(hotAvg >= 4.2) return {pred: 'TAI', conf: 68, reason: `Xúc xắc nóng: ${hot3.join(',')} (avg ${hotAvg.toFixed(1)}) -> TAI`};
+    if(hotAvg <= 2.8) return {pred: 'XIU', conf: 68, reason: `Xúc xắc nóng: ${hot3.join(',')} (avg ${hotAvg.toFixed(1)}) -> XIU`};
+    return {pred: hotAvg>3.5?'TAI':'XIU', conf: 55, reason: `Xúc xắc TB: ${hotAvg.toFixed(1)}`};
+}
 
-    static freq(arr) {
-        const count = {};
-        arr.forEach(v => { count[v] = (count[v] || 0) + 1; });
-        return count;
+// ============================================
+// THUẬT TOÁN 5: SOI CHU KỲ - PHIÊN CHẴN LẺ
+// ============================================
+function alg5_ChanLe(history) {
+    let eT=0,eX=0,oT=0,oX=0;
+    history.forEach(h=>{
+        if(h.id%2===0){ h.result==='TAI'?eT++:eX++; }
+        else { h.result==='TAI'?oT++:oX++; }
+    });
+    const nextEven = (history[0].id+1)%2===0;
+    if(nextEven) {
+        if(eT>eX) return {pred:'TAI',conf:60,reason:`Phiên chẵn thường TAI (${eT}/${eT+eX})`};
+        return {pred:'XIU',conf:60,reason:`Phiên chẵn thường XIU (${eX}/${eT+eX})`};
+    } else {
+        if(oT>oX) return {pred:'TAI',conf:60,reason:`Phiên lẻ thường TAI (${oT}/${oT+oX})`};
+        return {pred:'XIU',conf:60,reason:`Phiên lẻ thường XIU (${oX}/${oT+oX})`};
     }
 }
 
 // ============================================
-// THUẬT TOÁN 1: PHÂN TÍCH CHUỖI CẦU (STREAK)
+// THUẬT TOÁN 6: SOI TỔNG 3 PHIÊN GẦN NHẤT
 // ============================================
-class StreakAnalyzer {
-    static analyze(history) {
-        const results = history.map(h => h.result);
-        
-        // Tìm chuỗi hiện tại
-        let currentStreak = 1;
-        const currentType = results[0];
-        for (let i = 1; i < results.length; i++) {
-            if (results[i] === currentType) currentStreak++;
-            else break;
-        }
-
-        // Thống kê tất cả chuỗi
-        const allStreaks = [];
-        let streakCount = 1;
-        for (let i = 1; i < results.length; i++) {
-            if (results[i] === results[i-1]) streakCount++;
-            else {
-                allStreaks.push({ type: results[i-1], length: streakCount });
-                streakCount = 1;
-            }
-        }
-        allStreaks.push({ type: results[results.length-1], length: streakCount });
-
-        // Tính xác suất gãy cầu
-        const taiStreaks = allStreaks.filter(s => s.type === 'TAI');
-        const xiuStreaks = allStreaks.filter(s => s.type === 'XIU');
-        
-        const avgTaiStreak = taiStreaks.length > 0 ? Utils.mean(taiStreaks.map(s => s.length)) : 2;
-        const avgXiuStreak = xiuStreaks.length > 0 ? Utils.mean(xiuStreaks.map(s => s.length)) : 2;
-
-        // Xác suất gãy cầu dựa trên độ dài hiện tại
-        let breakProb = 0.5;
-        const relevantAvg = currentType === 'TAI' ? avgTaiStreak : avgXiuStreak;
-        if (currentStreak >= relevantAvg * 1.5) {
-            breakProb = 0.75; // Cầu dài bất thường -> khả năng gãy cao
-        } else if (currentStreak >= relevantAvg) {
-            breakProb = 0.6;
-        } else {
-            breakProb = 0.4; // Cầu còn ngắn -> khả năng tiếp tục
-        }
-
-        return {
-            currentStreak,
-            currentType,
-            avgTaiStreak: avgTaiStreak.toFixed(1),
-            avgXiuStreak: avgXiuStreak.toFixed(1),
-            breakProbability: breakProb,
-            prediction: breakProb > 0.55 ? (currentType === 'TAI' ? 'XIU' : 'TAI') : currentType,
-            confidence: Math.round(Math.abs(breakProb - 0.5) * 200)
-        };
-    }
+function alg6_Tong3Phien(history) {
+    if(history.length<4) return {pred:'TAI',conf:50,reason:'Chưa đủ dữ liệu'};
+    const last3 = history.slice(0,3).map(h=>h.point);
+    const sum = last3.reduce((a,b)=>a+b,0);
+    const prev3 = history.slice(1,4).map(h=>h.point);
+    const prevSum = prev3.reduce((a,b)=>a+b,0);
+    
+    // So sánh tổng 3 phiên
+    if(sum > 33 && prevSum > 33) return {pred:'XIU',conf:70,reason:`Tổng 3P cao (${sum}) -> giảm`};
+    if(sum < 30 && prevSum < 30) return {pred:'TAI',conf:70,reason:`Tổng 3P thấp (${sum}) -> tăng`};
+    if(sum > prevSum + 3) return {pred:'XIU',conf:62,reason:`Tổng tăng mạnh -> XIU`};
+    if(sum < prevSum - 3) return {pred:'TAI',conf:62,reason:`Tổng giảm mạnh -> TAI`};
+    return {pred: sum>=31.5?'TAI':'XIU', conf:54, reason:`Tổng 3P=${sum}`};
 }
 
 // ============================================
-// THUẬT TOÁN 2: PHÂN TÍCH ĐIỂM SỐ (SCORE)
+// THUẬT TOÁN 7: BẮT NHỊP 2-1 (2 TÀI 1 XỈU hoặc ngược lại)
 // ============================================
-class ScoreAnalyzer {
-    static analyze(history) {
-        const points = history.map(h => h.point);
-        const recent5 = points.slice(0, 5);
-        const recent10 = points.slice(0, 10);
-        
-        const mean = Utils.mean(points);
-        const std = Utils.std(points);
-        const recent5Mean = Utils.mean(recent5);
-        const recent10Mean = Utils.mean(recent10);
-        
-        // Detect xu hướng điểm
-        const trend5 = recent5Mean - mean;
-        const trend10 = recent10Mean - mean;
-        
-        let prediction, confidence;
-        
-        // Điểm đang cao hơn trung bình -> có xu hướng giảm
-        if (recent5Mean > mean + std * 0.3 && recent10Mean > mean + std * 0.2) {
-            prediction = 'XIU';
-            confidence = Math.round(55 + Math.abs(trend5) * 8);
-        }
-        // Điểm đang thấp hơn trung bình -> có xu hướng tăng
-        else if (recent5Mean < mean - std * 0.3 && recent10Mean < mean - std * 0.2) {
-            prediction = 'TAI';
-            confidence = Math.round(55 + Math.abs(trend5) * 8);
-        }
-        // Dao động quanh trung bình -> theo đà gần nhất
-        else {
-            const last5Tai = Utils.count(history.slice(0, 5), 'result', 'TAI');
-            prediction = last5Tai >= 3 ? 'TAI' : 'XIU';
-            confidence = 50 + Math.abs(last5Tai - 2.5) * 10;
-        }
-
-        return {
-            mean: mean.toFixed(1),
-            recent5Mean: recent5Mean.toFixed(1),
-            trend: trend5 > 0 ? 'UP' : 'DOWN',
-            prediction,
-            confidence: Math.min(85, confidence)
-        };
+function alg7_Nhip21(history) {
+    const res = history.map(h=>h.result);
+    if(res.length<4) return {pred:'TAI',conf:50,reason:'Chưa đủ dữ liệu'};
+    
+    const last4 = res.slice(0,4);
+    // Pattern: TAI-TAI-XIU-? -> dự đoán TAI (2-1-2-1)
+    if(last4[0]===last4[1] && last4[1]!==last4[2]) {
+        // Đang là XXY -> dự đoán X
+        return {pred: last4[0], conf: 67, reason: `Nhịp 2-1: ${last4.slice(0,3).join('-')} -> ${last4[0]}`};
     }
+    // Pattern: TAI-XIU-XIU-? -> dự đoán TAI
+    if(last4[0]!==last4[1] && last4[1]===last4[2]) {
+        return {pred: last4[0], conf: 67, reason: `Nhịp 1-2: ${last4.slice(0,3).join('-')} -> ${last4[0]}`};
+    }
+    return {pred: res[0]==='TAI'?'XIU':'TAI', conf:53, reason:'Không rõ nhịp'};
 }
 
 // ============================================
-// THUẬT TOÁN 3: PHÂN TÍCH XÚC XẮC NÓNG/LẠNH
+// THUẬT TOÁN 8: SOI LỊCH SỬ ĐỐI XỨNG
 // ============================================
-class DiceHotColdAnalyzer {
-    static analyze(history) {
-        const allDices = [];
-        history.forEach(h => {
-            if (h.dices) h.dices.forEach(d => allDices.push(d));
-        });
-
-        const freq = Utils.freq(allDices);
-        
-        // Xúc xắc nóng (xuất hiện nhiều)
-        const hot = Object.entries(freq)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 2)
-            .map(e => parseInt(e[0]));
-
-        // Xúc xắc lạnh (ít xuất hiện)
-        const cold = Object.entries(freq)
-            .sort((a, b) => a[1] - b[1])
-            .slice(0, 2)
-            .map(e => parseInt(e[0]));
-
-        // Tính xác suất TÀI dựa trên xúc xắc nóng
-        const hotSum = hot.reduce((a, b) => a + b, 0);
-        const hotAvg = hotSum / hot.length;
-        
-        // Nếu xúc xắc nóng thiên về số lớn -> TÀI
-        const prediction = hotAvg > 3.5 ? 'TAI' : 'XIU';
-        const confidence = Math.round(50 + Math.abs(hotAvg - 3.5) * 15);
-
-        return {
-            hot,
-            cold,
-            hotAvg: hotAvg.toFixed(1),
-            prediction,
-            confidence: Math.min(80, confidence)
-        };
+function alg8_DoiXung(history) {
+    const res = history.map(h=>h.result);
+    if(res.length<6) return {pred:'TAI',conf:50,reason:'Chưa đủ dữ liệu'};
+    
+    // Kiểm tra 5 phiên gần nhất có đối xứng không
+    const last5 = res.slice(0,5);
+    // Đối xứng dạng ABCBA
+    if(last5[0]===last5[4] && last5[1]===last5[3]) {
+        return {pred: last5[2]==='TAI'?'XIU':'TAI', conf:75, reason:`Đối xứng ABCBA -> đảo`};
     }
+    // Đối xứng dạng ABABA
+    if(last5[0]===last5[2] && last5[2]===last5[4] && last5[1]===last5[3] && last5[0]!==last5[1]) {
+        return {pred: res[0]==='TAI'?'XIU':'TAI', conf:78, reason:`Nhịp ABABA -> đảo`};
+    }
+    return {pred: res[0], conf:52, reason:'Không đối xứng -> theo đà'};
 }
 
 // ============================================
-// THUẬT TOÁN 4: PHÂN TÍCH NHỊP ĐẢO CHIỀU
+// ENSEMBLE TỔNG HỢP 8 THUẬT TOÁN
 // ============================================
-class ReversalPatternAnalyzer {
-    static analyze(history) {
-        const results = history.map(h => h.result);
-        const patterns = [];
-        
-        // Tìm các mẫu đảo chiều
-        for (let i = 1; i < results.length; i++) {
-            patterns.push(results[i] !== results[i-1] ? 'R' : 'C'); // R: Reverse, C: Continue
-        }
+function superVIPPredict(history) {
+    if(!history||history.length<5) return {prediction:'TAI',confidence:50,error:'Cần ít nhất 5 phiên'};
 
-        // Đếm tần suất đảo chiều gần đây
-        const recentPatterns = patterns.slice(0, 10);
-        const reversalCount = Utils.count(recentPatterns, null, 'R');
-        const reversalRate = reversalCount / recentPatterns.length;
+    const algs = [
+        {name:'Bắt cầu bệt', fn:alg1_BatCauBet, w:0.18},
+        {name:'Cầu 1-1 đảo chiều', fn:alg2_Cau11, w:0.15},
+        {name:'Soi điểm cao/thấp', fn:alg3_SoiDiem, w:0.14},
+        {name:'Soi xúc xắc nóng', fn:alg4_SoiXucXac, w:0.12},
+        {name:'Chu kỳ chẵn lẻ', fn:alg5_ChanLe, w:0.08},
+        {name:'Tổng 3 phiên gần', fn:alg6_Tong3Phien, w:0.12},
+        {name:'Bắt nhịp 2-1', fn:alg7_Nhip21, w:0.11},
+        {name:'Soi đối xứng', fn:alg8_DoiXung, w:0.10}
+    ];
 
-        // Phát hiện mẫu ABAB hoặc AABB
-        let patternDetected = null;
-        if (results.length >= 4) {
-            const last4 = results.slice(0, 4);
-            if (last4[0] === last4[2] && last4[1] === last4[3] && last4[0] !== last4[1]) {
-                patternDetected = 'ABAB'; // Đảo chiều liên tục
-            }
-            if (last4[0] === last4[1] && last4[2] === last4[3] && last4[0] !== last4[2]) {
-                patternDetected = 'AABB'; // Cặp đôi
-            }
-        }
+    let sT=0,sX=0,tw=0;
+    const details = algs.map(a=>{
+        const r = a.fn(history);
+        const conf = r.conf/100;
+        tw+=a.w;
+        if(r.pred==='TAI') sT+=a.w*conf; else sX+=a.w*conf;
+        return {name:a.name, prediction:r.pred, confidence:r.conf, reason:r.reason};
+    });
 
-        let prediction;
-        if (patternDetected === 'ABAB') {
-            // Nếu đang ABAB -> dự đoán đảo chiều
-            prediction = results[0] === 'TAI' ? 'XIU' : 'TAI';
-        } else if (patternDetected === 'AABB') {
-            // Nếu đang AABB -> dự đoán tiếp tục B
-            prediction = results[0];
-        } else if (reversalRate > 0.6) {
-            // Đảo chiều nhiều -> tiếp tục đảo chiều
-            prediction = results[0] === 'TAI' ? 'XIU' : 'TAI';
-        } else if (reversalRate < 0.3) {
-            // Ít đảo chiều -> tiếp tục xu hướng
-            prediction = results[0];
-        } else {
-            prediction = results[0] === 'TAI' ? 'XIU' : 'TAI';
-        }
+    sT/=tw; sX/=tw;
+    const pred = sT>sX?'TAI':'XIU';
+    const conf = Math.round((Math.max(sT,sX)/(sT+sX))*100);
 
-        return {
-            reversalRate: (reversalRate * 100).toFixed(1) + '%',
-            patternDetected,
-            prediction,
-            confidence: Math.round(50 + Math.abs(reversalRate - 0.5) * 40)
-        };
-    }
+    return {
+        prediction: pred,
+        confidence: conf,
+        scoreTAI: Math.round(sT*100),
+        scoreXIU: Math.round(sX*100),
+        voteTAI: details.filter(d=>d.prediction==='TAI').length,
+        voteXIU: details.filter(d=>d.prediction==='XIU').length,
+        algorithms: details
+    };
 }
 
 // ============================================
-// THUẬT TOÁN 5: DỰ ĐOÁN THEO CHU KỲ PHIÊN
+// FETCH API
 // ============================================
-class SessionCycleAnalyzer {
-    static analyze(history) {
-        const results = history.map(h => h.result);
-        const ids = history.map(h => h.id);
-        
-        // Phân tích theo vị trí phiên (chẵn/lẻ)
-        let evenTai = 0, evenXiu = 0, oddTai = 0, oddXiu = 0;
-        
-        history.forEach(h => {
-            if (h.id % 2 === 0) {
-                if (h.result === 'TAI') evenTai++;
-                else evenXiu++;
-            } else {
-                if (h.result === 'TAI') oddTai++;
-                else oddXiu++;
-            }
-        });
-
-        const nextId = history[0].id + 1;
-        const isNextEven = nextId % 2 === 0;
-        
-        let prediction;
-        if (isNextEven) {
-            prediction = evenTai > evenXiu ? 'TAI' : 'XIU';
-        } else {
-            prediction = oddTai > oddXiu ? 'TAI' : 'XIU';
-        }
-
-        return {
-            evenStats: { TAI: evenTai, XIU: evenXiu },
-            oddStats: { TAI: oddTai, XIU: oddXiu },
-            nextSessionType: isNextEven ? 'EVEN' : 'ODD',
-            prediction,
-            confidence: 55
-        };
-    }
-}
-
-// ============================================
-// THUẬT TOÁN 6: PHÂN TÍCH TỔNG ĐIỂM CHUỖI
-// ============================================
-class SumPatternAnalyzer {
-    static analyze(history) {
-        if (history.length < 6) {
-            return { prediction: 'TAI', confidence: 50 };
-        }
-
-        // Tính tổng điểm 3 phiên gần nhất
-        const sum3 = history.slice(0, 3).reduce((s, h) => s + h.point, 0);
-        const sum6 = history.slice(0, 6).reduce((s, h) => s + h.point, 0);
-        
-        const avg3 = sum3 / 3;
-        const avg6 = sum6 / 6;
-        
-        // So sánh với ngưỡng
-        const threshold = 10.5;
-        
-        let prediction;
-        if (avg3 > threshold && avg6 > threshold) {
-            // Cả 2 đều cao -> dự đoán giảm
-            prediction = 'XIU';
-        } else if (avg3 < threshold && avg6 < threshold) {
-            // Cả 2 đều thấp -> dự đoán tăng
-            prediction = 'TAI';
-        } else if (avg3 > avg6) {
-            // Ngắn hạn tăng -> tiếp tục tăng
-            prediction = 'TAI';
-        } else {
-            prediction = 'XIU';
-        }
-
-        return {
-            sum3,
-            sum6,
-            avg3: avg3.toFixed(1),
-            avg6: avg6.toFixed(1),
-            prediction,
-            confidence: Math.round(50 + Math.abs(avg3 - threshold) * 10)
-        };
-    }
-}
-
-// ============================================
-// ENSEMBLE - TỔNG HỢP 6 THUẬT TOÁN
-// ============================================
-class EnsemblePredictor {
-    static predict(history) {
-        if (!history || history.length < 5) {
-            return { 
-                prediction: 'TAI', 
-                confidence: 50,
-                error: 'Cần ít nhất 5 phiên lịch sử' 
-            };
-        }
-
-        const algorithms = [
-            { name: 'Phân tích cầu (Streak)', result: StreakAnalyzer.analyze(history), weight: 0.25 },
-            { name: 'Phân tích điểm số', result: ScoreAnalyzer.analyze(history), weight: 0.20 },
-            { name: 'Xúc xắc nóng/lạnh', result: DiceHotColdAnalyzer.analyze(history), weight: 0.15 },
-            { name: 'Nhịp đảo chiều', result: ReversalPatternAnalyzer.analyze(history), weight: 0.20 },
-            { name: 'Chu kỳ phiên', result: SessionCycleAnalyzer.analyze(history), weight: 0.10 },
-            { name: 'Tổng điểm chuỗi', result: SumPatternAnalyzer.analyze(history), weight: 0.10 }
-        ];
-
-        // Tính điểm có trọng số
-        let taiScore = 0, xiuScore = 0, totalWeight = 0;
-
-        const details = algorithms.map(algo => {
-            const w = algo.weight;
-            totalWeight += w;
-            const conf = algo.result.confidence / 100;
-            
-            if (algo.result.prediction === 'TAI') {
-                taiScore += w * conf;
-            } else {
-                xiuScore += w * conf;
-            }
-
-            return {
-                name: algo.name,
-                prediction: algo.result.prediction,
-                confidence: algo.result.confidence,
-                details: algo.result
-            };
-        });
-
-        // Chuẩn hóa
-        taiScore /= totalWeight;
-        xiuScore /= totalWeight;
-
-        const prediction = taiScore > xiuScore ? 'TAI' : 'XIU';
-        const confidence = Math.round(
-            (Math.max(taiScore, xiuScore) / (taiScore + xiuScore)) * 100
-        );
-
-        return {
-            prediction,
-            confidence,
-            scoreTAI: Math.round(taiScore * 100),
-            scoreXIU: Math.round(xiuScore * 100),
-            algorithms: details,
-            voteCount: {
-                TAI: details.filter(d => d.prediction === 'TAI').length,
-                XIU: details.filter(d => d.prediction === 'XIU').length
-            }
-        };
-    }
-}
-
-// ============================================
-// FETCH DATA
-// ============================================
-async function fetchHistory() {
+async function getData() {
     try {
-        const data = await Utils.fetchJSON(`${CONFIG.API_BASE}/sessions`);
-        if (!data || !data.list) return null;
-
+        const data = await fetchJSON(`${CONFIG.API_BASE}/sessions`);
+        if(!data||!data.list) return null;
         return {
-            list: data.list.map(s => ({
-                id: s.id,
-                result: s.resultTruyenThong,
-                dices: s.dices,
-                point: s.point
-            })),
-            stats: data.typeStat || { TAI: 0, XIU: 0 }
+            list: data.list.map(s=>({id:s.id,result:s.resultTruyenThong,dices:s.dices,point:s.point})),
+            stats: data.typeStat||{TAI:0,XIU:0}
         };
-    } catch (e) {
-        console.error('Fetch error:', e.message);
-        return null;
-    }
+    }catch(e){ return null; }
 }
 
 // ============================================
-// HTML TEMPLATE
+// HTML RENDER
 // ============================================
-function renderHTML(prediction, history, stats) {
-    const predColor = prediction.prediction === 'TAI' ? '#00ff88' : '#ff4444';
-    const predGlow = prediction.prediction === 'TAI' 
-        ? '0 0 40px rgba(0,255,136,0.6)' 
-        : '0 0 40px rgba(255,68,68,0.6)';
-
-    const algoHTML = prediction.algorithms.map((a, i) => {
-        const c = a.prediction === 'TAI' ? '#00ff88' : '#ff4444';
-        return `
-        <div class="algo-row">
-            <span class="algo-num">${i+1}</span>
-            <span class="algo-name">${a.name}</span>
-            <span class="algo-pred" style="color:${c}">${a.prediction}</span>
-            <span class="algo-conf">${a.confidence}%</span>
-            <div class="mini-bar"><div class="mini-fill" style="width:${a.confidence}%;background:${c}"></div></div>
+function html(pred, history, stats) {
+    const pc = pred.prediction==='TAI'?'#00ff88':'#ff4444';
+    const pg = pred.prediction==='TAI'?'0 0 50px rgba(0,255,136,0.7)':'0 0 50px rgba(255,68,68,0.7)';
+    
+    const algoRows = pred.algorithms.map((a,i)=>{
+        const c=a.prediction==='TAI'?'#00ff88':'#ff4444';
+        return `<div class="ar">
+            <span class="an">${i+1}. ${a.name}</span>
+            <span class="ap" style="color:${c}">${a.prediction}</span>
+            <span class="ac">${a.confidence}%</span>
+            <span class="ar2">${a.reason}</span>
         </div>`;
     }).join('');
 
-    const historyRows = history.slice(0, 30).map((h, i) => {
-        const c = h.result === 'TAI' ? '#00ff88' : '#ff4444';
-        const bg = i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.05)';
-        return `
-        <tr style="background:${bg}">
+    const hRows = history.slice(0,30).map((h,i)=>{
+        const c=h.result==='TAI'?'#00ff88':'#ff4444';
+        const bg=i%2===0?'rgba(255,255,255,0.02)':'rgba(255,255,255,0.05)';
+        return `<tr style="background:${bg}">
             <td>#${h.id}</td>
             <td style="color:${c};font-weight:bold">${h.result}</td>
             <td style="color:#ffd700">${h.point}</td>
@@ -474,299 +257,157 @@ function renderHTML(prediction, history, stats) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🔮 SUPER VIP AI - TÀI XỈU PREDICTOR</title>
+    <title>🔮 SUPER VIP PREDICTOR - TÀI XỈU</title>
     <style>
         *{margin:0;padding:0;box-sizing:border-box}
-        body{
-            font-family:'Segoe UI',monospace;
-            background:linear-gradient(135deg,#0a0a0f,#1a1a2e,#0f0f1a);
-            color:#fff;min-height:100vh;
-        }
-        .container{max-width:1000px;margin:0 auto;padding:20px}
-        .header{
-            text-align:center;padding:30px 0;
-            border-bottom:1px solid rgba(255,255,255,0.1);
-            margin-bottom:25px;
-        }
-        .header h1{
-            font-size:2.2em;
-            background:linear-gradient(45deg,#ffd700,#ff6b6b,#00ff88,#ffd700);
-            background-size:300% 300%;
-            -webkit-background-clip:text;
-            -webkit-text-fill-color:transparent;
-            animation:gradientBG 3s ease infinite;
-        }
-        @keyframes gradientBG{
-            0%,100%{background-position:0% 50%}
-            50%{background-position:100% 50%}
-        }
-        .header .sub{color:#888;font-size:.85em;margin-top:8px}
+        body{font-family:'Segoe UI',system-ui;background:linear-gradient(180deg,#0a0a14,#1a1a30,#0d0d1a);color:#fff;min-height:100vh}
+        .container{max-width:1000px;margin:0 auto;padding:15px}
+        .header{text-align:center;padding:25px 0;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:20px}
+        .header h1{font-size:2em;background:linear-gradient(45deg,#ffd700,#ff6b6b,#00ff88,#ffd700);background-size:300% 300%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:grad 3s ease infinite}
+        @keyframes grad{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+        .header p{color:#888;font-size:.8em;margin-top:5px}
         
-        .prediction-box{
-            background:rgba(255,255,255,0.03);
-            border:1px solid rgba(255,255,255,0.1);
-            border-radius:20px;padding:35px;
-            text-align:center;margin-bottom:20px;
-            animation:fadeIn .6s ease;
-        }
-        @keyframes fadeIn{
-            from{opacity:0;transform:translateY(-20px)}
-            to{opacity:1;transform:translateY(0)}
-        }
-        .pred-id{color:#ffd700;font-size:1.1em;margin-bottom:10px}
-        .pred-result{
-            font-size:5em;font-weight:900;
-            letter-spacing:8px;margin:15px 0;
-            animation:pulse 2s ease-in-out infinite;
-        }
-        @keyframes pulse{
-            0%,100%{transform:scale(1)}
-            50%{transform:scale(1.04)}
-        }
-        .conf-bar{
-            width:100%;height:35px;
-            background:rgba(255,255,255,0.08);
-            border-radius:20px;overflow:hidden;margin:20px 0;
-        }
-        .conf-fill{
-            height:100%;border-radius:20px;
-            display:flex;align-items:center;justify-content:center;
-            font-weight:bold;font-size:.9em;
-            transition:width .8s ease;
-        }
-        .score-row{
-            display:flex;justify-content:center;gap:40px;margin:20px 0;
-        }
-        .score-tai{font-size:2em;font-weight:bold;color:#00ff88}
-        .score-xiu{font-size:2em;font-weight:bold;color:#ff4444}
-        .score-vs{font-size:2em;color:#ffd700}
+        .pred-box{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:18px;padding:30px;text-align:center;margin-bottom:18px}
+        .pred-id{color:#ffd700;font-size:1em;margin-bottom:8px}
+        .pred-result{font-size:4.5em;font-weight:900;letter-spacing:8px;animation:pulse 2s ease-in-out infinite}
+        @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
+        .conf-bar{width:100%;height:32px;background:rgba(255,255,255,0.06);border-radius:16px;overflow:hidden;margin:15px 0}
+        .conf-fill{height:100%;border-radius:16px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:.85em}
+        .scores{display:flex;justify-content:center;gap:35px;margin:15px 0}
+        .scores .tai{color:#00ff88;font-size:1.8em;font-weight:bold}
+        .scores .xiu{color:#ff4444;font-size:1.8em;font-weight:bold}
+        .scores .vs{color:#ffd700;font-size:1.5em}
+        .badges{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin:15px 0}
+        .badge{padding:7px 18px;border-radius:20px;font-weight:bold;font-size:.8em}
+        .bt{background:rgba(0,255,136,0.12);color:#00ff88;border:1px solid rgba(0,255,136,0.25)}
+        .bx{background:rgba(255,68,68,0.12);color:#ff4444;border:1px solid rgba(255,68,68,0.25)}
+        .ba{background:rgba(255,215,0,0.12);color:#ffd700;border:1px solid rgba(255,215,0,0.25)}
         
-        .stats-row{
-            display:flex;justify-content:center;gap:15px;
-            flex-wrap:wrap;margin:20px 0;
-        }
-        .badge{
-            padding:8px 20px;border-radius:25px;
-            font-weight:bold;font-size:.85em;
-        }
-        .badge-tai{background:rgba(0,255,136,0.15);color:#00ff88;border:1px solid rgba(0,255,136,0.3)}
-        .badge-xiu{background:rgba(255,68,68,0.15);color:#ff4444;border:1px solid rgba(255,68,68,0.3)}
-        .badge-total{background:rgba(255,215,0,0.15);color:#ffd700;border:1px solid rgba(255,215,0,0.3)}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+        @media(max-width:768px){.grid{grid-template-columns:1fr}}
+        .card{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:14px;padding:18px}
+        .card h3{color:#ffd700;font-size:1em;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid rgba(255,215,0,0.15)}
         
-        .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:20px 0}
-        @media(max-width:768px){.grid-2{grid-template-columns:1fr}}
+        .ar{display:grid;grid-template-columns:1fr 50px 45px;gap:5px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.03);font-size:.8em;align-items:center}
+        .ar .an{color:#aaa}
+        .ar .ap{font-weight:bold;text-align:center}
+        .ar .ac{text-align:right;color:#888}
+        .ar .ar2{grid-column:1/-1;color:#666;font-size:.75em;padding-left:15px}
         
-        .card{
-            background:rgba(255,255,255,0.03);
-            border:1px solid rgba(255,255,255,0.08);
-            border-radius:15px;padding:20px;
-        }
-        .card-title{
-            color:#ffd700;font-size:1.1em;
-            margin-bottom:15px;padding-bottom:10px;
-            border-bottom:1px solid rgba(255,215,0,0.2);
-        }
+        .tbl-scroll{max-height:420px;overflow-y:auto;border-radius:8px}
+        .tbl-scroll::-webkit-scrollbar{width:4px}
+        .tbl-scroll::-webkit-scrollbar-track{background:rgba(255,255,255,0.02)}
+        .tbl-scroll::-webkit-scrollbar-thumb{background:rgba(255,215,0,0.2);border-radius:3px}
+        table{width:100%;border-collapse:collapse;font-size:.8em}
+        th{color:#ffd700;padding:10px 8px;text-align:left;border-bottom:2px solid rgba(255,215,0,0.25);position:sticky;top:0;background:#1a1a30}
+        td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.03)}
         
-        .algo-row{
-            display:flex;align-items:center;padding:8px 0;
-            border-bottom:1px solid rgba(255,255,255,0.04);
-            font-size:.85em;
-        }
-        .algo-num{
-            width:25px;color:#555;
-        }
-        .algo-name{flex:1;color:#aaa}
-        .algo-pred{width:45px;font-weight:bold;text-align:center}
-        .algo-conf{width:45px;text-align:right;color:#888}
-        .mini-bar{
-            width:70px;height:4px;
-            background:rgba(255,255,255,0.1);
-            border-radius:2px;margin-left:10px;overflow:hidden;
-        }
-        .mini-fill{height:100%;border-radius:2px;transition:width .5s}
-        
-        .history-scroll{max-height:450px;overflow-y:auto;border-radius:10px}
-        .history-scroll::-webkit-scrollbar{width:4px}
-        .history-scroll::-webkit-scrollbar-track{background:rgba(255,255,255,0.03)}
-        .history-scroll::-webkit-scrollbar-thumb{background:rgba(255,215,0,0.3);border-radius:4px}
-        
-        table{width:100%;border-collapse:collapse;font-size:.85em}
-        th{color:#ffd700;padding:12px 10px;text-align:left;border-bottom:2px solid rgba(255,215,0,0.3);position:sticky;top:0;background:#1a1a2e}
-        td{padding:10px;border-bottom:1px solid rgba(255,255,255,0.04)}
-        
-        .refresh-btn{
-            display:block;margin:25px auto;
-            background:linear-gradient(45deg,#ffd700,#ffaa00);
-            color:#000;border:none;padding:14px 35px;
-            border-radius:30px;font-size:1em;font-weight:bold;
-            cursor:pointer;transition:all .3s;
-        }
-        .refresh-btn:hover{transform:scale(1.05);box-shadow:0 5px 25px rgba(255,215,0,0.4)}
-        
-        .footer{text-align:center;padding:20px;color:#555;font-size:.75em}
-        
-        .vote-box{
-            display:flex;justify-content:center;gap:20px;margin:15px 0;
-            font-size:.9em;color:#888;
-        }
-        .vote-box span{font-weight:bold}
-        .vote-tai{color:#00ff88}
-        .vote-xiu{color:#ff4444}
+        .btn{display:block;margin:20px auto;background:linear-gradient(45deg,#ffd700,#ffaa00);color:#000;border:none;padding:12px 30px;border-radius:25px;font-weight:bold;cursor:pointer;transition:.3s;font-size:.95em}
+        .btn:hover{transform:scale(1.04);box-shadow:0 5px 20px rgba(255,215,0,0.35)}
+        .footer{text-align:center;padding:15px;color:#555;font-size:.7em}
+        .vote{text-align:center;color:#888;font-size:.8em;margin:8px 0}
+        .vote .vt{color:#00ff88;font-weight:bold}
+        .vote .vx{color:#ff4444;font-weight:bold}
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🔮 SUPER VIP AI PREDICTOR</h1>
-            <p class="sub">6 Thuật toán AI Ensemble | Phân tích chuyên sâu TÀI/XỈU</p>
+            <p>8 Thuật toán bắt cầu siêu VIP | Phân tích TÀI/XỈU chuyên sâu</p>
         </div>
         
-        <!-- DỰ ĐOÁN CHÍNH -->
-        <div class="prediction-box">
-            <div class="pred-id">🎯 DỰ ĐOÁN PHIÊN #${prediction.nextId || '---'}</div>
-            <div class="pred-result" style="color:${predColor};text-shadow:${predGlow}">
-                ${prediction.prediction}
+        <div class="pred-box">
+            <div class="pred-id">🎯 PHIÊN DỰ ĐOÁN #${pred.nextId}</div>
+            <div class="pred-result" style="color:${pc};text-shadow:${pg}">${pred.prediction}</div>
+            <div class="conf-bar"><div class="conf-fill" style="width:${pred.confidence}%;background:${pc}">ĐỘ TIN CẬY: ${pred.confidence}%</div></div>
+            <div class="scores">
+                <div><div class="tai">${pred.scoreTAI}%</div><small style="color:#888">TÀI</small></div>
+                <div class="vs">⚡</div>
+                <div><div class="xiu">${pred.scoreXIU}%</div><small style="color:#888">XỈU</small></div>
             </div>
-            <div class="conf-bar">
-                <div class="conf-fill" style="width:${prediction.confidence}%;background:${predColor}">
-                    ĐỘ TIN CẬY: ${prediction.confidence}%
-                </div>
-            </div>
-            <div class="score-row">
-                <div>
-                    <div class="score-tai">${prediction.scoreTAI}%</div>
-                    <small style="color:#888">TÀI</small>
-                </div>
-                <div class="score-vs">VS</div>
-                <div>
-                    <div class="score-xiu">${prediction.scoreXIU}%</div>
-                    <small style="color:#888">XỈU</small>
-                </div>
-            </div>
-            <div class="vote-box">
-                🗳 Thuật toán bầu: 
-                <span class="vote-tai">${prediction.voteCount.TAI} TÀI</span> | 
-                <span class="vote-xiu">${prediction.voteCount.XIU} XỈU</span>
-            </div>
-            <div class="stats-row">
-                <span class="badge badge-tai">TÀI: ${stats.TAI}</span>
-                <span class="badge badge-xiu">XỈU: ${stats.XIU}</span>
-                <span class="badge badge-total">TỔNG: ${stats.TAI + stats.XIU} phiên</span>
+            <div class="vote">🗳 Thuật toán bầu: <span class="vt">${pred.voteTAI} TÀI</span> | <span class="vx">${pred.voteXIU} XỈU</span></div>
+            <div class="badges">
+                <span class="badge bt">TÀI: ${stats.TAI}</span>
+                <span class="badge bx">XỈU: ${stats.XIU}</span>
+                <span class="badge ba">TỔNG: ${stats.TAI+stats.XIU} phiên</span>
             </div>
         </div>
         
-        <div class="grid-2">
-            <!-- THUẬT TOÁN -->
+        <div class="grid">
             <div class="card">
-                <div class="card-title">🧠 6 THUẬT TOÁN PHÂN TÍCH</div>
-                ${algoHTML}
+                <h3>🧠 8 THUẬT TOÁN SIÊU VIP</h3>
+                ${algoRows}
             </div>
-            
-            <!-- LỊCH SỬ -->
             <div class="card">
-                <div class="card-title">📜 LỊCH SỬ PHIÊN</div>
-                <div class="history-scroll">
+                <h3>📜 LỊCH SỬ PHIÊN</h3>
+                <div class="tbl-scroll">
                     <table>
                         <thead><tr><th>ID</th><th>KQ</th><th>ĐIỂM</th><th>XÚC XẮC</th></tr></thead>
-                        <tbody>${historyRows}</tbody>
+                        <tbody>${hRows}</tbody>
                     </table>
                 </div>
             </div>
         </div>
         
-        <button class="refresh-btn" onclick="location.reload()">🔄 DỰ ĐOÁN LẠI</button>
-        <div class="footer">
-            <p>⚠️ Công cụ phân tích Lab - Chỉ mang tính tham khảo</p>
-            <p>Super VIP AI Predictor v4.0 | 6 Algorithms Ensemble</p>
-        </div>
+        <button class="btn" onclick="location.reload()">🔄 DỰ ĐOÁN LẠI</button>
+        <div class="footer">⚠️ Công cụ phân tích Lab | Super VIP Predictor v5.0 | 8 Algorithms</div>
     </div>
 </body>
 </html>`;
 }
 
 // ============================================
-// HTTP SERVER
+// SERVER
 // ============================================
 const server = http.createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Origin','*');
+    res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers','Content-Type');
+    if(req.method==='OPTIONS'){ res.writeHead(204); return res.end(); }
 
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        return res.end();
-    }
-
-    const parsedUrl = url.parse(req.url, true);
-    const pathname = parsedUrl.pathname;
+    const pathname = url.parse(req.url).pathname;
 
     try {
-        if (pathname === '/vanhoa') {
-            // API JSON dự đoán
-            const data = await fetchHistory();
-            if (!data) {
-                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-                return res.end(JSON.stringify({ error: 'Không thể lấy dữ liệu' }));
-            }
-
-            const prediction = EnsemblePredictor.predict(data.list);
-            const nextId = data.list.length > 0 ? data.list[0].id + 1 : 1;
-
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({
-                success: true,
-                nextId,
-                prediction: prediction.prediction,
-                confidence: prediction.confidence,
-                scoreTAI: prediction.scoreTAI,
-                scoreXIU: prediction.scoreXIU,
-                voteCount: prediction.voteCount,
-                algorithms: prediction.algorithms.map(a => ({
-                    name: a.name,
-                    prediction: a.prediction,
-                    confidence: a.confidence
-                })),
-                stats: data.stats
-            }, null, 2));
-
-        } else {
-            // Trang HTML chính
-            const data = await fetchHistory();
-            if (!data) {
-                res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-                return res.end('<h1>Lỗi kết nối API</h1>');
-            }
-
-            const prediction = EnsemblePredictor.predict(data.list);
-            const nextId = data.list.length > 0 ? data.list[0].id + 1 : 1;
-            
-            const predictionWithId = {
-                ...prediction,
-                nextId
-            };
-
-            const html = renderHTML(predictionWithId, data.list, data.stats);
-            
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(html);
+        const data = await getData();
+        if(!data) {
+            res.writeHead(500,{'Content-Type':'text/html; charset=utf-8'});
+            return res.end('<h1>Lỗi kết nối API nguồn</h1>');
         }
 
-    } catch (e) {
-        console.error('Server error:', e);
-        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: e.message }));
+        const pred = superVIPPredict(data.list);
+        const nextId = data.list.length>0 ? data.list[0].id+1 : 1;
+        const fullPred = {...pred, nextId};
+
+        if(pathname==='/vanhoa') {
+            // JSON API
+            res.writeHead(200,{'Content-Type':'application/json; charset=utf-8'});
+            return res.end(JSON.stringify({
+                success:true,
+                nextId,
+                prediction: pred.prediction,
+                confidence: pred.confidence,
+                scoreTAI: pred.scoreTAI,
+                scoreXIU: pred.scoreXIU,
+                voteTAI: pred.voteTAI,
+                voteXIU: pred.voteXIU,
+                algorithms: pred.algorithms.map(a=>({name:a.name,prediction:a.prediction,confidence:a.confidence,reason:a.reason})),
+                stats: data.stats
+            },null,2));
+        }
+
+        // HTML
+        res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});
+        res.end(html(fullPred, data.list, data.stats));
+
+    } catch(e) {
+        res.writeHead(500,{'Content-Type':'text/html; charset=utf-8'});
+        res.end(`<h1>Lỗi server: ${e.message}</h1>`);
     }
 });
 
-// ============================================
-// START
-// ============================================
 server.listen(CONFIG.PORT, () => {
-    console.log('╔══════════════════════════════════════╗');
-    console.log('║  🔮 SUPER VIP AI PREDICTOR v4.0  ║');
-    console.log('╠══════════════════════════════════════╣');
-    console.log(`║  🌐 Web: http://localhost:${CONFIG.PORT}   ║`);
-    console.log(`║  📡 API: http://localhost:${CONFIG.PORT}/vanhoa ║`);
-    console.log('║  🧠 6 Thuật toán AI Ensemble     ║');
-    console.log('╚══════════════════════════════════════╝');
+    console.log(`🚀 Super VIP Predictor chạy tại port ${CONFIG.PORT}`);
+    console.log(`🌐 Web: http://localhost:${CONFIG.PORT}`);
+    console.log(`📡 API: http://localhost:${CONFIG.PORT}/vanhoa`);
 });
